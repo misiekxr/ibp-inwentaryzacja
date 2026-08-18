@@ -170,12 +170,39 @@ main {
 
 .save-status.saving { color: var(--muted); }
 
-#marker-photo-preview {
-  max-width: 100%;
-  max-height: 160px;
+.photo-gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.photo-thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+}
+
+.photo-thumb img {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
   border-radius: 6px;
   border: 1px solid var(--border);
+  display: block;
+}
+
+.photo-thumb-del {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  line-height: 18px;
+  border-radius: 50%;
+  background: var(--danger);
+  border-color: var(--danger);
+  font-size: 0.85rem;
 }
 
 table .thumb {

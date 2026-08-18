@@ -47,10 +47,10 @@
       <label>Uwagi
         <textarea id="marker-note" rows="4" placeholder="Opis, uwagi..."></textarea>
       </label>
-      <label>Zdjęcie
-        <input type="file" id="marker-photo-input" accept="image/*" capture="environment">
+      <label>Dodaj zdjęcie (można kilka)
+        <input type="file" id="marker-photo-input" accept="image/*" capture="environment" multiple>
       </label>
-      <img id="marker-photo-preview" class="hidden" alt="zdjęcie punktu">
+      <div id="marker-photo-gallery" class="photo-gallery"></div>
       <p class="save-status" id="save-status">Zapisano</p>
       <div class="marker-panel-actions">
         <button id="marker-delete" class="danger">Usuń punkt</button>

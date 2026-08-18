@@ -33,6 +33,30 @@ async function dbDeleteMarker(id) {
   await db.delete("markers", id);
 }
 
+async function dbAddPhotoToMarker(id, blob, type) {
+  const db = await dbPromise;
+  const tx = db.transaction("markers", "readwrite");
+  const existing = await tx.store.get(id);
+  if (!existing) return null;
+  const photos = [...(existing.photos || []), { blob, type, addedAt: new Date().toISOString() }];
+  const updated = { ...existing, photos, updatedAt: new Date().toISOString() };
+  await tx.store.put(updated);
+  await tx.done;
+  return updated;
+}
+
+async function dbRemovePhotoFromMarker(id, photoIndex) {
+  const db = await dbPromise;
+  const tx = db.transaction("markers", "readwrite");
+  const existing = await tx.store.get(id);
+  if (!existing) return null;
+  const photos = (existing.photos || []).filter((_, i) => i !== photoIndex);
+  const updated = { ...existing, photos, updatedAt: new Date().toISOString() };
+  await tx.store.put(updated);
+  await tx.done;
+  return updated;
+}
+
 async function dbGetMarker(id) {
   const db = await dbPromise;
   return db.get("markers", id);
@@ -91,7 +115,7 @@ const markerPanel = document.getElementById("marker-panel");
 const markerPanelTitle = document.getElementById("marker-panel-title");
 const markerNote = document.getElementById("marker-note");
 const markerPhotoInput = document.getElementById("marker-photo-input");
-const markerPhotoPreview = document.getElementById("marker-photo-preview");
+const markerPhotoGallery = document.getElementById("marker-photo-gallery");
 const saveStatus = document.getElementById("save-status");
 const markerDeleteBtn = document.getElementById("marker-delete");
 const markerCloseBtn = document.getElementById("marker-close");
@@ -243,7 +267,7 @@ async function selectPlan(buildingCode, file, name) {
 }
 
 function addLeafletMarker(m) {
-  const marker = L.marker([m.y, m.x], { icon: makeIcon(!!m.photo), draggable: false });
+  const marker = L.marker([m.y, m.x], { icon: makeIcon(!!(m.photos && m.photos.length)), draggable: false });
   marker.markerData = m;
   marker.on("click", (e) => {
     L.DomEvent.stopPropagation(e);
@@ -264,10 +288,40 @@ function setSaveStatus(text, saving) {
   saveStatus.classList.toggle("saving", !!saving);
 }
 
+function renderPhotoGallery(photos) {
+  markerPhotoGallery.innerHTML = "";
+  (photos || []).forEach((p, idx) => {
+    const wrap = document.createElement("div");
+    wrap.className = "photo-thumb";
+
+    const img = document.createElement("img");
+    img.src = URL.createObjectURL(p.blob);
+    img.alt = "zdjęcie punktu";
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "photo-thumb-del";
+    del.textContent = "×";
+    del.title = "Usuń zdjęcie";
+    del.addEventListener("click", async () => {
+      const id = editingMarkerId;
+      if (id == null) return;
+      const updated = await dbRemovePhotoFromMarker(id, idx);
+      if (updated && editingMarkerId === id) {
+        renderPhotoGallery(updated.photos);
+        refreshLeafletMarker(updated);
+      }
+    });
+
+    wrap.appendChild(img);
+    wrap.appendChild(del);
+    markerPhotoGallery.appendChild(wrap);
+  });
+}
+
 function resetPhotoInput() {
   markerPhotoInput.value = "";
-  markerPhotoPreview.classList.add("hidden");
-  markerPhotoPreview.removeAttribute("src");
+  markerPhotoGallery.innerHTML = "";
 }
 
 async function onMapClick(e) {
@@ -280,8 +334,7 @@ async function onMapClick(e) {
     x: e.latlng.lng,
     y: e.latlng.lat,
     note: "",
-    photo: null,
-    photoType: null,
+    photos: [],
     createdAt: now,
     updatedAt: now,
   });
@@ -293,11 +346,8 @@ function openMarkerPanel(m) {
   editingMarkerId = m.id;
   markerPanelTitle.textContent = `Punkt #${m.id}`;
   markerNote.value = m.note || "";
-  resetPhotoInput();
-  if (m.photo) {
-    markerPhotoPreview.src = URL.createObjectURL(m.photo);
-    markerPhotoPreview.classList.remove("hidden");
-  }
+  markerPhotoInput.value = "";
+  renderPhotoGallery(m.photos);
   setSaveStatus("Zapisano", false);
   markerPanel.classList.remove("hidden");
   markerNote.focus();
@@ -308,7 +358,7 @@ async function closeMarkerPanel() {
     const m = await dbGetMarker(editingMarkerId);
     // porzadek: pusty punkt (bez notatki i zdjecia) usuwamy, zeby przypadkowe
     // tapniecie na mape nie zostawialo "widmowych" pinezek
-    if (m && !(m.note || "").trim() && !m.photo) {
+    if (m && !(m.note || "").trim() && !(m.photos && m.photos.length)) {
       await dbDeleteMarker(editingMarkerId);
       const old = leafletMarkers[editingMarkerId];
       if (old) map.removeLayer(old);
@@ -336,18 +386,17 @@ markerNote.addEventListener("input", () => {
 });
 
 markerPhotoInput.addEventListener("change", async () => {
-  const file = markerPhotoInput.files[0];
-  if (!file || editingMarkerId == null) return;
-  setSaveStatus("Zapisywanie zdjęcia…", true);
+  const files = Array.from(markerPhotoInput.files || []);
+  if (!files.length || editingMarkerId == null) return;
+  setSaveStatus(files.length > 1 ? "Zapisywanie zdjęć…" : "Zapisywanie zdjęcia…", true);
   const id = editingMarkerId;
-  const updated = await dbUpdateMarker(id, {
-    photo: file,
-    photoType: file.type,
-    updatedAt: new Date().toISOString(),
-  });
+  let updated = null;
+  for (const file of files) {
+    updated = await dbAddPhotoToMarker(id, file, file.type);
+  }
+  markerPhotoInput.value = "";
   if (updated && editingMarkerId === id) {
-    markerPhotoPreview.src = URL.createObjectURL(file);
-    markerPhotoPreview.classList.remove("hidden");
+    renderPhotoGallery(updated.photos);
     setSaveStatus("Zapisano", false);
     refreshLeafletMarker(updated);
   }
@@ -403,7 +452,9 @@ async function loadInventory() {
   tbody.innerHTML = "";
   markers.forEach((m, idx) => {
     const tr = document.createElement("tr");
-    const photoCell = m.photo ? `<img class="thumb" src="${URL.createObjectURL(m.photo)}" alt="zdjęcie">` : "";
+    const photoCell = (m.photos && m.photos.length)
+      ? `<img class="thumb" src="${URL.createObjectURL(m.photos[0].blob)}" alt="zdjęcie">${m.photos.length > 1 ? ` +${m.photos.length - 1}` : ""}`
+      : "";
     tr.innerHTML = `
       <td>${idx + 1}</td>
       <td>${m.planName}</td>
@@ -504,6 +555,10 @@ exportBackupBtn.addEventListener("click", async () => {
   const markers = await dbGetAllMarkers();
   const out = [];
   for (const m of markers) {
+    const photos = [];
+    for (const p of m.photos || []) {
+      photos.push({ image: await blobToDataUrl(p.blob), addedAt: p.addedAt });
+    }
     out.push({
       buildingCode: m.buildingCode,
       planFile: m.planFile,
@@ -511,7 +566,7 @@ exportBackupBtn.addEventListener("click", async () => {
       x: m.x,
       y: m.y,
       note: m.note,
-      photo: m.photo ? await blobToDataUrl(m.photo) : null,
+      photos,
       createdAt: m.createdAt,
       updatedAt: m.updatedAt,
     });
@@ -529,7 +584,10 @@ importBackupInput.addEventListener("change", async () => {
   const text = await file.text();
   const records = JSON.parse(text);
   for (const r of records) {
-    const photoBlob = r.photo ? dataUrlToBlob(r.photo) : null;
+    const photos = (r.photos || []).map((p) => {
+      const blob = dataUrlToBlob(p.image);
+      return { blob, type: blob.type, addedAt: p.addedAt || new Date().toISOString() };
+    });
     await dbAddMarker({
       buildingCode: r.buildingCode,
       planKey: planKeyOf(r.buildingCode, r.planFile),
@@ -538,8 +596,7 @@ importBackupInput.addEventListener("change", async () => {
       x: r.x,
       y: r.y,
       note: r.note || "",
-      photo: photoBlob,
-      photoType: photoBlob ? photoBlob.type : null,
+      photos,
       createdAt: r.createdAt || new Date().toISOString(),
       updatedAt: r.updatedAt || new Date().toISOString(),
     });
@@ -670,25 +727,40 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
   y += 6;
   doc.setFontSize(9);
 
+  const THUMB = 16;
+  const THUMB_GAP = 2;
+  const MAX_THUMBS = 4;
+
   for (let i = 0; i < markers.length; i++) {
     const m = markers[i];
     const num = i + 1;
+    const photos = m.photos || [];
     const noteLines = doc.splitTextToSize(`${num}. ${m.note || "(brak notatki)"}`, availW - 20);
-    const blockH = Math.max(noteLines.length * 4.2, m.photo ? 18 : 0) + 4;
+    const photosRowH = photos.length ? THUMB + 4 : 0;
+    const blockH = noteLines.length * 4.2 + photosRowH + 4;
     if (y + blockH > pageH - margin) {
       doc.addPage();
       y = margin;
     }
-    if (m.photo) {
-      try {
-        const dataUrl = await blobToDataUrl(m.photo);
-        const fmt = /png/i.test(dataUrl.slice(0, 30)) ? "PNG" : "JPEG";
-        doc.addImage(dataUrl, fmt, margin, y, 16, 16);
-      } catch (e) {
-        // zdjecie w nieobslugiwanym formacie (np. HEIC) - pomijamy miniaturke, tekst zostaje
-      }
+    if (photos.length) {
       doc.text(noteLines, margin + 20, y + 4);
-      y += Math.max(18, noteLines.length * 4.2) + 4;
+      let thumbX = margin;
+      for (let p = 0; p < Math.min(photos.length, MAX_THUMBS); p++) {
+        try {
+          const dataUrl = await blobToDataUrl(photos[p].blob);
+          const fmt = /png/i.test(dataUrl.slice(0, 30)) ? "PNG" : "JPEG";
+          doc.addImage(dataUrl, fmt, thumbX, y, THUMB, THUMB);
+        } catch (e) {
+          // zdjecie w nieobslugiwanym formacie (np. HEIC) - pomijamy miniaturke, tekst zostaje
+        }
+        thumbX += THUMB + THUMB_GAP;
+      }
+      if (photos.length > MAX_THUMBS) {
+        doc.setFontSize(7);
+        doc.text(`+${photos.length - MAX_THUMBS}`, thumbX, y + THUMB / 2);
+        doc.setFontSize(9);
+      }
+      y += Math.max(noteLines.length * 4.2, photosRowH) + 4;
     } else {
       doc.text(noteLines, margin, y + 4);
       y += noteLines.length * 4.2 + 4;
