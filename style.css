@@ -170,6 +170,29 @@ main {
 
 .save-status.saving { color: var(--muted); }
 
+.photo-add-row {
+  display: flex;
+  gap: 8px;
+}
+
+.photo-add-btn {
+  flex: 1;
+  text-align: center;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: white;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.photo-add-btn.secondary {
+  background: white;
+  color: var(--text);
+  border-color: var(--border);
+}
+
 .photo-gallery {
   display: flex;
   flex-wrap: wrap;

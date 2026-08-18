@@ -47,9 +47,14 @@
       <label>Uwagi
         <textarea id="marker-note" rows="4" placeholder="Opis, uwagi..."></textarea>
       </label>
-      <label>Dodaj zdjęcie (można kilka)
-        <input type="file" id="marker-photo-input" accept="image/*" capture="environment" multiple>
-      </label>
+      <div class="photo-add-row">
+        <label class="photo-add-btn">Zrób zdjęcie
+          <input type="file" id="marker-photo-camera" accept="image/*" capture="environment" class="hidden">
+        </label>
+        <label class="photo-add-btn secondary">Dodaj z galerii
+          <input type="file" id="marker-photo-gallery-input" accept="image/*" multiple class="hidden">
+        </label>
+      </div>
       <div id="marker-photo-gallery" class="photo-gallery"></div>
       <p class="save-status" id="save-status">Zapisano</p>
       <div class="marker-panel-actions">

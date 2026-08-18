@@ -114,7 +114,8 @@ const backupBanner = document.getElementById("backup-banner");
 const markerPanel = document.getElementById("marker-panel");
 const markerPanelTitle = document.getElementById("marker-panel-title");
 const markerNote = document.getElementById("marker-note");
-const markerPhotoInput = document.getElementById("marker-photo-input");
+const markerPhotoCamera = document.getElementById("marker-photo-camera");
+const markerPhotoGalleryInput = document.getElementById("marker-photo-gallery-input");
 const markerPhotoGallery = document.getElementById("marker-photo-gallery");
 const saveStatus = document.getElementById("save-status");
 const markerDeleteBtn = document.getElementById("marker-delete");
@@ -320,7 +321,8 @@ function renderPhotoGallery(photos) {
 }
 
 function resetPhotoInput() {
-  markerPhotoInput.value = "";
+  markerPhotoCamera.value = "";
+  markerPhotoGalleryInput.value = "";
   markerPhotoGallery.innerHTML = "";
 }
 
@@ -346,7 +348,8 @@ function openMarkerPanel(m) {
   editingMarkerId = m.id;
   markerPanelTitle.textContent = `Punkt #${m.id}`;
   markerNote.value = m.note || "";
-  markerPhotoInput.value = "";
+  markerPhotoCamera.value = "";
+  markerPhotoGalleryInput.value = "";
   renderPhotoGallery(m.photos);
   setSaveStatus("Zapisano", false);
   markerPanel.classList.remove("hidden");
@@ -385,8 +388,8 @@ markerNote.addEventListener("input", () => {
   }, 500);
 });
 
-markerPhotoInput.addEventListener("change", async () => {
-  const files = Array.from(markerPhotoInput.files || []);
+async function handlePhotoFiles(input) {
+  const files = Array.from(input.files || []);
   if (!files.length || editingMarkerId == null) return;
   setSaveStatus(files.length > 1 ? "Zapisywanie zdjęć…" : "Zapisywanie zdjęcia…", true);
   const id = editingMarkerId;
@@ -394,13 +397,16 @@ markerPhotoInput.addEventListener("change", async () => {
   for (const file of files) {
     updated = await dbAddPhotoToMarker(id, file, file.type);
   }
-  markerPhotoInput.value = "";
+  input.value = "";
   if (updated && editingMarkerId === id) {
     renderPhotoGallery(updated.photos);
     setSaveStatus("Zapisano", false);
     refreshLeafletMarker(updated);
   }
-});
+}
+
+markerPhotoCamera.addEventListener("change", () => handlePhotoFiles(markerPhotoCamera));
+markerPhotoGalleryInput.addEventListener("change", () => handlePhotoFiles(markerPhotoGalleryInput));
 
 markerDeleteBtn.addEventListener("click", async () => {
   if (editingMarkerId == null) return;
