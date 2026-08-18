@@ -729,21 +729,25 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
 
   const THUMB = 16;
   const THUMB_GAP = 2;
-  const MAX_THUMBS = 4;
+  const MAX_THUMBS = 6;
 
   for (let i = 0; i < markers.length; i++) {
     const m = markers[i];
     const num = i + 1;
     const photos = m.photos || [];
-    const noteLines = doc.splitTextToSize(`${num}. ${m.note || "(brak notatki)"}`, availW - 20);
+    const noteLines = doc.splitTextToSize(`${num}. ${m.note || "(brak notatki)"}`, availW);
     const photosRowH = photos.length ? THUMB + 4 : 0;
     const blockH = noteLines.length * 4.2 + photosRowH + 4;
     if (y + blockH > pageH - margin) {
       doc.addPage();
       y = margin;
     }
+
+    // najpierw tekst notatki (pelna szerokosc), zdjecia (jesli sa) ponizej niego
+    doc.text(noteLines, margin, y + 4);
+    y += noteLines.length * 4.2 + 2;
+
     if (photos.length) {
-      doc.text(noteLines, margin + 20, y + 4);
       let thumbX = margin;
       for (let p = 0; p < Math.min(photos.length, MAX_THUMBS); p++) {
         try {
@@ -760,11 +764,9 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
         doc.text(`+${photos.length - MAX_THUMBS}`, thumbX, y + THUMB / 2);
         doc.setFontSize(9);
       }
-      y += Math.max(noteLines.length * 4.2, photosRowH) + 4;
-    } else {
-      doc.text(noteLines, margin, y + 4);
-      y += noteLines.length * 4.2 + 4;
+      y += THUMB + 2;
     }
+    y += 4;
   }
 
   doc.save(`raport-${buildingCode}-${planName}.pdf`.replace(/[\\/:*?"<>|]/g, "_"));
