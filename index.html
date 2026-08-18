@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Inwentaryzacja obiektow IBP</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="theme-color" content="#2563eb">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="vendor/leaflet.css" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="backup-banner" class="hidden"></div>
+
+<header>
+  <h1>Inwentaryzacja obiektów — IBP</h1>
+  <div class="controls">
+    <label>Budynek:
+      <select id="building-select"></select>
+    </label>
+    <label>Plan / rzut:
+      <select id="plan-select"></select>
+    </label>
+  </div>
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="map">Mapa</button>
+    <button class="tab-btn" data-tab="inventory">Inwentaryzacja</button>
+    <button class="tab-btn" data-tab="backup">Kopia zapasowa</button>
+  </nav>
+</header>
+
+<main>
+  <section id="tab-map" class="tab-panel active">
+    <div id="empty-state" class="hidden">
+      <p>Brak wczytanych planów budynków.</p>
+      <p>Przejdź do zakładki <strong>Kopia zapasowa</strong> i wczytaj plik planów (np. plany-B1.json).</p>
+    </div>
+    <div id="map"></div>
+    <button id="report-btn" class="fab hidden" title="Raport tego rzutu (PDF)">Raport</button>
+    <div id="marker-panel" class="hidden">
+      <h3 id="marker-panel-title">Punkt</h3>
+      <label>Uwagi
+        <textarea id="marker-note" rows="4" placeholder="Opis, uwagi..."></textarea>
+      </label>
+      <label>Zdjęcie
+        <input type="file" id="marker-photo-input" accept="image/*" capture="environment">
+      </label>
+      <img id="marker-photo-preview" class="hidden" alt="zdjęcie punktu">
+      <p class="save-status" id="save-status">Zapisano</p>
+      <div class="marker-panel-actions">
+        <button id="marker-delete" class="danger">Usuń punkt</button>
+        <button id="marker-close" class="secondary">Zamknij</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-inventory" class="tab-panel">
+    <div class="inventory-toolbar">
+      <label>Filtruj plan:
+        <select id="inventory-plan-filter">
+          <option value="">Wszystkie</option>
+        </select>
+      </label>
+      <a id="export-csv-link" href="#">Eksportuj CSV</a>
+    </div>
+    <table id="inventory-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Plan</th>
+          <th>Uwagi</th>
+          <th>Zdjęcie</th>
+          <th>Utworzono</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section id="tab-backup" class="tab-panel">
+    <div class="backup-panel">
+      <h2>Plany budynków</h2>
+      <p>
+        Rzuty budynków nie są częścią samej aplikacji (celowo — appka jest publicznie
+        dostępna, a rzuty budynków nie powinny być). Wczytaj je raz, lokalnie — od tej
+        pory zostają zapisane tylko na tym telefonie, tak jak notatki i zdjęcia.
+      </p>
+      <p id="buildings-loaded-info">Wczytane budynki: brak</p>
+      <label>Wczytaj plik planów budynku (plany-B1.json, plany-B2.json, itd.)
+        <input type="file" id="import-plans-input" accept="application/json">
+      </label>
+    </div>
+
+    <div class="backup-panel">
+      <h2>Kopia zapasowa danych</h2>
+      <p>
+        Wszystkie dane (punkty, notatki, zdjęcia) są zapisane tylko na tym telefonie.
+        Regularnie rób kopię zapasową i zapisz ją gdzieś poza telefonem (e-mail, dysk w chmurze),
+        żeby nic nie przepadło w razie zgubienia lub reset telefonu.
+      </p>
+      <p id="last-export-info">Ostatni eksport kopii: nigdy</p>
+      <button id="export-backup-btn">Pobierz kopię zapasową (JSON)</button>
+      <hr>
+      <h3>Przywróć z kopii</h3>
+      <p>Wczytaj wcześniej pobrany plik kopii zapasowej — dane zostaną dodane do obecnych.</p>
+      <input type="file" id="import-backup-input" accept="application/json">
+    </div>
+  </section>
+</main>
+
+<script src="vendor/leaflet.js"></script>
+<script src="vendor/idb.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
