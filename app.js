@@ -620,8 +620,10 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
   const radius = Math.max(10, Math.round(cw * 0.012));
   markers.forEach((m, idx) => {
     const num = idx + 1;
+    // Leaflet (CRS.Simple) liczy y "od dolu w gore" (jak szerokosc geograficzna),
+    // a canvas/obrazek "od gory w dol" - trzeba odwrocic os Y przy przenoszeniu.
     const x = m.x * scale;
-    const y = m.y * scale;
+    const y = (img.naturalHeight - m.y) * scale;
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.fillStyle = "#dc2626";
