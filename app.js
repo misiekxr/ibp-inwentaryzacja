@@ -107,12 +107,14 @@ async function dbGetAllPlanImages() {
 const buildingSelect = document.getElementById("building-select");
 const planSelect = document.getElementById("plan-select");
 const inventoryPlanFilter = document.getElementById("inventory-plan-filter");
+const inventoryStatusFilter = document.getElementById("inventory-status-filter");
 const exportCsvLink = document.getElementById("export-csv-link");
 const reportBtn = document.getElementById("report-btn");
 const backupBanner = document.getElementById("backup-banner");
 
 const markerPanel = document.getElementById("marker-panel");
 const markerPanelTitle = document.getElementById("marker-panel-title");
+const markerDone = document.getElementById("marker-done");
 const markerNote = document.getElementById("marker-note");
 const markerPhotoCamera = document.getElementById("marker-photo-camera");
 const markerPhotoGalleryInput = document.getElementById("marker-photo-gallery-input");
@@ -145,13 +147,14 @@ function planKeyOf(buildingCode, file) {
   return `${buildingCode}::${file}`;
 }
 
-function makeIcon(hasPhoto) {
+function makeIcon(hasPhoto, done) {
   const badge = hasPhoto
     ? `<div style="position:absolute;top:-4px;right:-4px;font-size:9px;line-height:1;">📷</div>`
     : "";
+  const color = done ? "#16a34a" : "#2563eb";
   return L.divIcon({
     className: "",
-    html: `<div style="position:relative;width:16px;height:16px;border-radius:50%;background:#2563eb;border:2px solid white;box-shadow:0 0 3px rgba(0,0,0,0.5);">${badge}</div>`,
+    html: `<div style="position:relative;width:16px;height:16px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 3px rgba(0,0,0,0.5);">${badge}</div>`,
     iconSize: [16, 16],
     iconAnchor: [8, 8],
   });
@@ -268,11 +271,23 @@ async function selectPlan(buildingCode, file, name) {
 }
 
 function addLeafletMarker(m) {
-  const marker = L.marker([m.y, m.x], { icon: makeIcon(!!(m.photos && m.photos.length)), draggable: false });
+  const marker = L.marker([m.y, m.x], {
+    icon: makeIcon(!!(m.photos && m.photos.length), !!m.done),
+    draggable: true,
+  });
   marker.markerData = m;
   marker.on("click", (e) => {
     L.DomEvent.stopPropagation(e);
     openMarkerPanel(m);
+  });
+  marker.on("dragend", async () => {
+    const latlng = marker.getLatLng();
+    const updated = await dbUpdateMarker(m.id, {
+      x: latlng.lng,
+      y: latlng.lat,
+      updatedAt: new Date().toISOString(),
+    });
+    if (updated) marker.markerData = updated;
   });
   marker.addTo(map);
   leafletMarkers[m.id] = marker;
@@ -337,6 +352,7 @@ async function onMapClick(e) {
     y: e.latlng.lat,
     note: "",
     photos: [],
+    done: false,
     createdAt: now,
     updatedAt: now,
   });
@@ -347,6 +363,7 @@ async function onMapClick(e) {
 function openMarkerPanel(m) {
   editingMarkerId = m.id;
   markerPanelTitle.textContent = `Punkt #${m.id}`;
+  markerDone.checked = !!m.done;
   markerNote.value = m.note || "";
   markerPhotoCamera.value = "";
   markerPhotoGalleryInput.value = "";
@@ -372,6 +389,16 @@ async function closeMarkerPanel() {
   editingMarkerId = null;
   await loadInventory();
 }
+
+markerDone.addEventListener("change", async () => {
+  if (editingMarkerId == null) return;
+  const id = editingMarkerId;
+  const updated = await dbUpdateMarker(id, { done: markerDone.checked, updatedAt: new Date().toISOString() });
+  if (updated && editingMarkerId === id) {
+    refreshLeafletMarker(updated);
+    await loadInventory();
+  }
+});
 
 markerNote.addEventListener("input", () => {
   if (editingMarkerId == null) return;
@@ -445,13 +472,17 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 
 // --- Inventory tab ---
 inventoryPlanFilter.addEventListener("change", loadInventory);
+inventoryStatusFilter.addEventListener("change", loadInventory);
 
 async function loadInventory() {
   if (!currentBuildingCode) return;
   const planKey = inventoryPlanFilter.value;
-  const markers = planKey
+  const statusFilter = inventoryStatusFilter.value;
+  let markers = planKey
     ? await dbGetMarkersByPlan(planKey)
     : await dbGetMarkersByBuilding(currentBuildingCode);
+  if (statusFilter === "open") markers = markers.filter((m) => !m.done);
+  if (statusFilter === "done") markers = markers.filter((m) => !!m.done);
   markers.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
 
   const tbody = document.querySelector("#inventory-table tbody");
@@ -461,9 +492,13 @@ async function loadInventory() {
     const photoCell = (m.photos && m.photos.length)
       ? `<img class="thumb" src="${URL.createObjectURL(m.photos[0].blob)}" alt="zdjęcie">${m.photos.length > 1 ? ` +${m.photos.length - 1}` : ""}`
       : "";
+    const statusCell = m.done
+      ? `<span class="status-chip done">Załatwione</span>`
+      : `<span class="status-chip open">Do zrobienia</span>`;
     tr.innerHTML = `
       <td>${idx + 1}</td>
       <td>${m.planName}</td>
+      <td>${statusCell}</td>
       <td>${(m.note || "").replace(/</g, "&lt;")}</td>
       <td>${photoCell}</td>
       <td>${(m.createdAt || "").replace("T", " ").slice(0, 19)}</td>
@@ -511,11 +546,12 @@ function downloadBlob(blob, filename) {
 async function exportCsv(buildingCode) {
   const markers = await dbGetMarkersByBuilding(buildingCode);
   markers.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
-  const header = ["Budynek", "Plan", "Uwagi", "X", "Y", "Utworzono", "Zaktualizowano"];
+  const header = ["Budynek", "Plan", "Status", "Uwagi", "X", "Y", "Utworzono", "Zaktualizowano"];
   const lines = [header.map(csvEscape).join(";")];
   for (const m of markers) {
+    const status = m.done ? "Załatwione" : "Do zrobienia";
     lines.push(
-      [buildingCode, m.planName, m.note, m.x, m.y, m.createdAt, m.updatedAt].map(csvEscape).join(";")
+      [buildingCode, m.planName, status, m.note, m.x, m.y, m.createdAt, m.updatedAt].map(csvEscape).join(";")
     );
   }
   const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
@@ -572,6 +608,7 @@ exportBackupBtn.addEventListener("click", async () => {
       x: m.x,
       y: m.y,
       note: m.note,
+      done: !!m.done,
       photos,
       createdAt: m.createdAt,
       updatedAt: m.updatedAt,
@@ -602,6 +639,7 @@ importBackupInput.addEventListener("change", async () => {
       x: r.x,
       y: r.y,
       note: r.note || "",
+      done: !!r.done,
       photos,
       createdAt: r.createdAt || new Date().toISOString(),
       updatedAt: r.updatedAt || new Date().toISOString(),
@@ -741,7 +779,8 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
     const m = markers[i];
     const num = i + 1;
     const photos = m.photos || [];
-    const noteLines = doc.splitTextToSize(`${num}. ${m.note || "(brak notatki)"}`, availW);
+    const statusMark = m.done ? "[✓]" : "[ ]";
+    const noteLines = doc.splitTextToSize(`${statusMark} ${num}. ${m.note || "(brak notatki)"}`, availW);
     const photosRowH = photos.length ? THUMB + 4 : 0;
     const blockH = noteLines.length * 4.2 + photosRowH + 4;
     if (y + blockH > pageH - margin) {

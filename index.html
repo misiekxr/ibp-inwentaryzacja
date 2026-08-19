@@ -44,6 +44,10 @@
     <button id="report-btn" class="fab hidden" title="Raport tego rzutu (PDF)">Raport</button>
     <div id="marker-panel" class="hidden">
       <h3 id="marker-panel-title">Punkt</h3>
+      <label class="status-toggle">
+        <input type="checkbox" id="marker-done">
+        Załatwione
+      </label>
       <label>Uwagi
         <textarea id="marker-note" rows="4" placeholder="Opis, uwagi..."></textarea>
       </label>
@@ -71,6 +75,13 @@
           <option value="">Wszystkie</option>
         </select>
       </label>
+      <label>Status:
+        <select id="inventory-status-filter">
+          <option value="">Wszystkie</option>
+          <option value="open">Do zrobienia</option>
+          <option value="done">Załatwione</option>
+        </select>
+      </label>
       <a id="export-csv-link" href="#">Eksportuj CSV</a>
     </div>
     <table id="inventory-table">
@@ -78,6 +89,7 @@
         <tr>
           <th>#</th>
           <th>Plan</th>
+          <th>Status</th>
           <th>Uwagi</th>
           <th>Zdjęcie</th>
           <th>Utworzono</th>

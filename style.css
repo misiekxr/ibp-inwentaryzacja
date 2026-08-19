@@ -162,6 +162,37 @@ main {
 #marker-panel h3 { margin: 0 0 4px 0; font-size: 0.95rem; }
 #marker-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: var(--muted); }
 
+.status-toggle {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px !important;
+  font-size: 0.9rem !important;
+  color: var(--text) !important;
+}
+
+.status-toggle input {
+  width: 16px;
+  height: 16px;
+}
+
+.status-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.status-chip.open {
+  background: #dbeafe;
+  color: #1e3a8a;
+}
+
+.status-chip.done {
+  background: #dcfce7;
+  color: #166534;
+}
+
 .save-status {
   margin: 0;
   font-size: 0.75rem;
