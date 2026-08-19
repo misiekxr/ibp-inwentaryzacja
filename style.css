@@ -4,21 +4,30 @@
   --border: #d8dbe0;
   --text: #1f2328;
   --muted: #6b7280;
-  --accent: #2563eb;
+  /* Pantone 202C wg Systemu Identyfikacji Wizualnej UPWr */
+  --accent: #782834;
+  --accent-light: #b96f7a;
   --danger: #dc2626;
   --ok: #16a34a;
+  --font-serif: Constantia, Georgia, "Times New Roman", serif;
+  --font-sans: system-ui, "Segoe UI", sans-serif;
 }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  font-family: system-ui, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
   color: var(--text);
   background: var(--bg);
   height: 100vh;
   display: flex;
   flex-direction: column;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-serif);
+  font-weight: 600;
 }
 
 #backup-banner {
@@ -34,6 +43,7 @@ body {
 header {
   background: var(--panel);
   border-bottom: 1px solid var(--border);
+  border-top: 4px solid var(--accent);
   padding: 10px 16px;
 }
 
@@ -184,8 +194,8 @@ main {
 }
 
 .status-chip.open {
-  background: #dbeafe;
-  color: #1e3a8a;
+  background: #f1dde1;
+  color: var(--accent);
 }
 
 .status-chip.done {

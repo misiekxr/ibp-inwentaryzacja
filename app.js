@@ -151,7 +151,7 @@ function makeIcon(hasPhoto, done) {
   const badge = hasPhoto
     ? `<div style="position:absolute;top:-4px;right:-4px;font-size:9px;line-height:1;">📷</div>`
     : "";
-  const color = done ? "#16a34a" : "#2563eb";
+  const color = done ? "#16a34a" : "#782834";
   return L.divIcon({
     className: "",
     html: `<div style="position:relative;width:16px;height:16px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 3px rgba(0,0,0,0.5);">${badge}</div>`,
@@ -727,7 +727,7 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
     const y = (img.naturalHeight - m.y) * scale;
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.fillStyle = "#dc2626";
+    ctx.fillStyle = m.done ? "#16a34a" : "#782834";
     ctx.fill();
     ctx.lineWidth = Math.max(2, radius * 0.15);
     ctx.strokeStyle = "white";
@@ -746,11 +746,22 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
   const margin = 12;
+  const BRAND = [120, 40, 52]; // Pantone 202C - System Identyfikacji Wizualnej UPWr
+  doc.setFont("times", "normal");
 
+  // pasek akcentu na gorze strony, nawiazujacy do SIW UPWr
+  doc.setFillColor(...BRAND);
+  doc.rect(0, 0, pageW, 4, "F");
+
+  doc.setTextColor(...BRAND);
+  doc.setFont("times", "bold");
   doc.setFontSize(13);
-  doc.text(`Inwentaryzacja — budynek ${buildingCode} — ${planName}`, margin, margin);
+  doc.text(`Inwentaryzacja — budynek ${buildingCode} — ${planName}`, margin, margin + 6);
+  doc.setFont("times", "normal");
+  doc.setTextColor(90, 90, 90);
   doc.setFontSize(9);
-  doc.text(`Wygenerowano: ${new Date().toLocaleString("pl-PL")}`, margin, margin + 5);
+  doc.text(`Wygenerowano: ${new Date().toLocaleString("pl-PL")}`, margin, margin + 11);
+  doc.setTextColor(20, 20, 20);
 
   const availW = pageW - margin * 2;
   const maxImgH = pageH * 0.55;
@@ -762,13 +773,17 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
     imgW = imgH / imgRatio;
   }
   const imgX = margin + (availW - imgW) / 2;
-  const imgY = margin + 10;
+  const imgY = margin + 16;
   doc.addImage(mapImageData, "JPEG", imgX, imgY, imgW, imgH);
 
   let y = imgY + imgH + 10;
+  doc.setTextColor(...BRAND);
+  doc.setFont("times", "bold");
   doc.setFontSize(11);
   doc.text("Legenda:", margin, y);
   y += 6;
+  doc.setFont("times", "normal");
+  doc.setTextColor(20, 20, 20);
   doc.setFontSize(9);
 
   const THUMB = 16;
