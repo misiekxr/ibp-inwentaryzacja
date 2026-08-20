@@ -120,6 +120,8 @@ const markerPanelTitle = document.getElementById("marker-panel-title");
 const markerDone = document.getElementById("marker-done");
 const markerCategory = document.getElementById("marker-category");
 const markerCategoryCustom = document.getElementById("marker-category-custom");
+const manageCategoriesBtn = document.getElementById("manage-categories-btn");
+const categoryManageList = document.getElementById("category-manage-list");
 const markerNote = document.getElementById("marker-note");
 const markerPhotoCamera = document.getElementById("marker-photo-camera");
 const markerPhotoGalleryInput = document.getElementById("marker-photo-gallery-input");
@@ -168,14 +170,33 @@ const DEFAULT_CATEGORIES = [
   "Aktualizacja planów IBP",
 ];
 
-// Lista kategorii = kategorie domyslne + wszystkie juz uzyte w bazie (np. wpisane
-// recznie przez "+ Nowa kategoria") - dzieki temu raz wpisana kategoria pojawia sie
-// pozniej sama w liscie, bez potrzeby wpisywania jej ponownie za kazdym razem.
+// Lista kategorii = kategorie domyslne (pomniejszone o usuniete przez uzytkownika,
+// patrz deleteCategory) + wszystkie juz uzyte w bazie (np. wpisane recznie przez
+// "+ Nowa kategoria") - dzieki temu raz wpisana kategoria pojawia sie pozniej sama
+// w liscie, bez potrzeby wpisywania jej ponownie za kazdym razem.
 async function knownCategories() {
+  const removedDefaults = (await dbGetMeta("removedDefaultCategories")) || [];
   const markers = await dbGetAllMarkers();
-  const set = new Set(DEFAULT_CATEGORIES);
+  const set = new Set(DEFAULT_CATEGORIES.filter((c) => !removedDefaults.includes(c)));
   for (const m of markers) if (m.category) set.add(m.category);
   return Array.from(set).sort((a, b) => a.localeCompare(b, "pl"));
+}
+
+// Usuniecie kategorii: punkty ktore ja mialy wracaja do "(brak)". Kategorie domyslne
+// sa "na stale" w kodzie, wiec zeby faktycznie znikaly z listy po usunieciu, zapisujemy
+// je w IndexedDB jako wykluczone (removedDefaultCategories) - patrz knownCategories().
+async function deleteCategory(name) {
+  const markers = await dbGetAllMarkers();
+  for (const m of markers) {
+    if (m.category === name) await dbUpdateMarker(m.id, { category: "", updatedAt: new Date().toISOString() });
+  }
+  if (DEFAULT_CATEGORIES.includes(name)) {
+    const removed = (await dbGetMeta("removedDefaultCategories")) || [];
+    if (!removed.includes(name)) {
+      removed.push(name);
+      await dbSetMeta("removedDefaultCategories", removed);
+    }
+  }
 }
 
 async function populateCategorySelect(selected) {
@@ -205,17 +226,61 @@ async function populateCategorySelect(selected) {
   }
 }
 
-function makeIcon(hasPhoto, done, unlocked) {
+async function renderCategoryManageList() {
+  const cats = await knownCategories();
+  categoryManageList.innerHTML = "";
+  if (!cats.length) {
+    categoryManageList.innerHTML = '<p class="category-manage-empty">Brak kategorii.</p>';
+    return;
+  }
+  for (const c of cats) {
+    const row = document.createElement("div");
+    row.className = "category-manage-row";
+
+    const label = document.createElement("span");
+    label.textContent = c;
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "category-manage-del";
+    del.textContent = "×";
+    del.title = "Usuń kategorię";
+    del.addEventListener("click", async () => {
+      if (!confirm(`Usunąć kategorię „${c}”? Punkty z tą kategorią wrócą do statusu (brak).`)) return;
+      await deleteCategory(c);
+      await renderCategoryManageList();
+      if (editingMarkerId != null) {
+        const current = await dbGetMarker(editingMarkerId);
+        await populateCategorySelect(current ? current.category || "" : "");
+      }
+      await loadInventory();
+    });
+
+    row.appendChild(label);
+    row.appendChild(del);
+    categoryManageList.appendChild(row);
+  }
+}
+
+manageCategoriesBtn.addEventListener("click", async () => {
+  const willShow = categoryManageList.classList.contains("hidden");
+  if (willShow) await renderCategoryManageList();
+  categoryManageList.classList.toggle("hidden");
+});
+
+// Kropka odblokowania przesuwania jest zawsze obecna w DOM (tylko ukryta) i
+// przelaczana pozniej bezposrednio przez klase CSS, NIGDY przez marker.setIcon() -
+// setIcon() tworzy nowy element ikony i po drodze potrafi urwac wlasne sciezki
+// zdarzen Leaflet (m.in. przeciaganie), co bylo przyczyna buga "wibracja dziala,
+// nic wiecej sie nie dzieje".
+function makeIcon(hasPhoto, done) {
   const badge = hasPhoto
     ? `<div style="position:absolute;top:-4px;right:-4px;font-size:9px;line-height:1;">📷</div>`
-    : "";
-  const unlockDot = unlocked
-    ? `<div style="position:absolute;bottom:-3px;left:-3px;width:9px;height:9px;border-radius:50%;background:#dc2626;border:1.5px solid white;"></div>`
     : "";
   const color = done ? "#16a34a" : "#782834";
   return L.divIcon({
     className: "",
-    html: `<div style="position:relative;width:16px;height:16px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 3px rgba(0,0,0,0.5);">${badge}${unlockDot}</div>`,
+    html: `<div style="position:relative;width:16px;height:16px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 3px rgba(0,0,0,0.5);">${badge}<div class="marker-unlock-dot" style="display:none;position:absolute;bottom:-3px;left:-3px;width:9px;height:9px;border-radius:50%;background:#dc2626;border:1.5px solid white;"></div></div>`,
     iconSize: [16, 16],
     iconAnchor: [8, 8],
   });
@@ -341,16 +406,11 @@ async function selectPlan(buildingCode, file, name) {
 
 function addLeafletMarker(m) {
   const marker = L.marker([m.y, m.x], {
-    icon: makeIcon(!!(m.photos && m.photos.length), !!m.done, false),
+    icon: makeIcon(!!(m.photos && m.photos.length), !!m.done),
     draggable: false,
   });
   marker.markerData = m;
   marker.dragUnlocked = false;
-
-  const refreshIcon = () => {
-    const d = marker.markerData;
-    marker.setIcon(makeIcon(!!(d.photos && d.photos.length), !!d.done, marker.dragUnlocked));
-  };
 
   // Przesuwanie pinezki wymaga przytrzymania 3 sek. (jak "tryb edycji" po
   // przytrzymaniu ikony na ekranie glownym telefonu) - chroni przed przypadkowym
@@ -363,17 +423,24 @@ function addLeafletMarker(m) {
       longPressTimer = null;
     }
   };
+  // Kropka jest przelaczana bezposrednio na stabilnym elemencie DOM (patrz
+  // komentarz w makeIcon) - nie wolno tu wywolywac marker.setIcon().
+  const setUnlockDotVisible = (visible) => {
+    const el = marker.getElement();
+    const dot = el && el.querySelector(".marker-unlock-dot");
+    if (dot) dot.style.display = visible ? "block" : "none";
+  };
   const unlockDrag = () => {
     marker.dragUnlocked = true;
     marker.dragging.enable();
-    refreshIcon();
+    setUnlockDotVisible(true);
     if (navigator.vibrate) navigator.vibrate(50);
   };
   const lockDrag = () => {
     cancelLongPress();
     marker.dragUnlocked = false;
     marker.dragging.disable();
-    refreshIcon();
+    setUnlockDotVisible(false);
   };
 
   marker.on("click", (e) => {
@@ -565,6 +632,7 @@ async function openMarkerPanel(m) {
   markerPanelTitle.textContent = `Punkt #${m.id}`;
   markerDone.checked = !!m.done;
   await populateCategorySelect(m.category || "");
+  categoryManageList.classList.add("hidden");
   markerNote.value = m.note || "";
   markerPhotoCamera.value = "";
   markerPhotoGalleryInput.value = "";
@@ -611,6 +679,7 @@ markerCategory.addEventListener("change", async () => {
   }
   const id = editingMarkerId;
   await dbUpdateMarker(id, { category: markerCategory.value, updatedAt: new Date().toISOString() });
+  setSaveStatus("Zapisano", false);
 });
 
 async function saveCustomCategory() {
@@ -623,7 +692,10 @@ async function saveCustomCategory() {
     return;
   }
   await dbUpdateMarker(id, { category: value, updatedAt: new Date().toISOString() });
-  if (editingMarkerId === id) await populateCategorySelect(value);
+  if (editingMarkerId === id) {
+    await populateCategorySelect(value);
+    setSaveStatus("Zapisano", false);
+  }
 }
 
 markerCategoryCustom.addEventListener("keydown", (e) => {
@@ -760,13 +832,23 @@ async function maybeShareToGallery(file) {
   // Cala funkcja w jednym try/catch, zeby zaden blad API (np. brak wsparcia
   // udostepniania plikow na danym telefonie) nie odbil sie echem na zapisie
   // zdjecia w appce - ten zapis (handlePhotoFiles) dziala calkowicie niezaleznie.
+  const named = new File([file], buildPhotoFilename(file.type), { type: file.type });
   try {
-    if (!navigator.canShare) return;
-    const named = new File([file], buildPhotoFilename(file.type), { type: file.type });
-    if (!navigator.canShare({ files: [named] })) return;
-    await navigator.share({ files: [named] });
+    if (navigator.canShare && navigator.canShare({ files: [named] })) {
+      await navigator.share({ files: [named] });
+      return;
+    }
   } catch (err) {
-    // brak wsparcia / uzytkownik anulowal udostepnianie - appka i tak juz zapisala zdjecie u siebie
+    // uzytkownik anulowal okno Udostepnij albo API zawiodlo w trakcie -
+    // sprobuj zapasowej metody ponizej zamiast konczyc po cichu bez efektu
+  }
+  // Zapasowa metoda dla przegladarek bez wsparcia Web Share API dla plikow
+  // (na to trafilismy w praktyce): zwykle pobranie pliku. Trafia do folderu
+  // Pobrane, skad wiekszosc galerii/Zdjec na Androidzie i tak go zaindeksuje.
+  try {
+    downloadBlob(named, named.name);
+  } catch (err) {
+    // ostatecznosc - appka i tak juz zapisala zdjecie u siebie, wiec dane nie gina
   }
 }
 
@@ -1043,12 +1125,25 @@ exportBackupBtn.addEventListener("click", async () => {
   await refreshBackupInfo();
 });
 
+// Punkt uznajemy za juz istniejacy, jesli w tym samym budynku/planie jest juz
+// wpis z dokladnie tym samym createdAt - to wystarczajaco unikalny "odcisk palca"
+// (znacznik czasu utworzenia, przenoszony przez eksport/import bez zmian), zeby
+// wykryc powtorny import tej samej kopii zapasowej bez ryzyka falszywych trafien.
 importBackupInput.addEventListener("change", async () => {
   const file = importBackupInput.files[0];
   if (!file) return;
   const text = await file.text();
   const records = JSON.parse(text);
+  const existing = await dbGetAllMarkers();
+  const existingKeys = new Set(existing.map((m) => `${m.buildingCode}::${m.planFile}::${m.createdAt}`));
+  let imported = 0;
+  let skipped = 0;
   for (const r of records) {
+    const key = `${r.buildingCode}::${r.planFile}::${r.createdAt}`;
+    if (existingKeys.has(key)) {
+      skipped++;
+      continue;
+    }
     const photos = (r.photos || []).map((p) => {
       const blob = dataUrlToBlob(p.image);
       return { blob, type: blob.type, addedAt: p.addedAt || new Date().toISOString() };
@@ -1067,9 +1162,11 @@ importBackupInput.addEventListener("change", async () => {
       createdAt: r.createdAt || new Date().toISOString(),
       updatedAt: r.updatedAt || new Date().toISOString(),
     });
+    existingKeys.add(key);
+    imported++;
   }
   importBackupInput.value = "";
-  alert(`Zaimportowano ${records.length} punktów.`);
+  alert(`Zaimportowano ${imported} punktów.` + (skipped ? ` Pominięto ${skipped} jako duplikaty (już istniały).` : ""));
   if (currentPlanKey) await selectPlan(currentBuildingCode, currentPlanFile, currentPlanName);
   await loadInventory();
 });

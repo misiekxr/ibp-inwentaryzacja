@@ -211,6 +211,55 @@ main {
 
 .save-status.saving { color: var(--muted); }
 
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 0.78rem;
+  padding: 2px 0;
+  text-align: left;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.category-manage-list {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.category-manage-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.82rem;
+}
+
+.category-manage-row span { min-width: 0; overflow-wrap: break-word; }
+
+.category-manage-del {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  line-height: 20px;
+  border-radius: 50%;
+  background: white;
+  color: var(--danger);
+  border-color: var(--danger);
+  font-size: 0.9rem;
+}
+
+.category-manage-empty {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 0;
+}
+
 .photo-add-row {
   display: flex;
   gap: 8px;
