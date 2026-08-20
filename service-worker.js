@@ -1,4 +1,4 @@
-const CACHE_VERSION = "ibp-v15";
+const CACHE_VERSION = "ibp-v16";
 
 const CORE_FILES = [
   "./",
@@ -10,6 +10,7 @@ const CORE_FILES = [
   "vendor/leaflet.css",
   "vendor/idb.js",
   "vendor/jspdf.umd.min.js",
+  "vendor/ptserif-font.js",
   "icons/icon-192.png",
   "icons/icon-512.png",
 ];

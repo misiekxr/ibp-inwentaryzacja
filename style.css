@@ -253,6 +253,7 @@ main {
   border-radius: 6px;
   border: 1px solid var(--border);
   display: block;
+  cursor: pointer;
 }
 
 .photo-thumb-del {
@@ -275,7 +276,58 @@ table .thumb {
   object-fit: cover;
   border-radius: 4px;
   border: 1px solid var(--border);
+  cursor: pointer;
 }
+
+#photo-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#photo-lightbox.hidden { display: none; }
+
+#lightbox-img {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+}
+
+#lightbox-close,
+#lightbox-prev,
+#lightbox-next {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  border: none;
+  color: white;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#lightbox-close {
+  top: 12px;
+  right: 12px;
+  width: 40px;
+  height: 40px;
+  font-size: 1.5rem;
+}
+
+#lightbox-prev,
+#lightbox-next {
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  font-size: 1.8rem;
+}
+
+#lightbox-prev { left: 12px; }
+#lightbox-next { right: 12px; }
 
 /* Na waskich ekranach (telefon): panel jako wysuwany dol, zawsze w zasiegu kciuka */
 @media (max-width: 640px) {
@@ -372,6 +424,7 @@ button.danger {
 
 .inventory-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 16px;
   margin-bottom: 12px;

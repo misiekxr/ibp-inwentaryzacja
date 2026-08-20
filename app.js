@@ -106,6 +106,7 @@ async function dbGetAllPlanImages() {
 // --- DOM ---
 const buildingSelect = document.getElementById("building-select");
 const planSelect = document.getElementById("plan-select");
+const inventoryBuildingFilter = document.getElementById("inventory-building-filter");
 const inventoryPlanFilter = document.getElementById("inventory-plan-filter");
 const inventoryStatusFilter = document.getElementById("inventory-status-filter");
 const inventoryCategoryFilter = document.getElementById("inventory-category-filter");
@@ -138,6 +139,12 @@ const emptyState = document.getElementById("empty-state");
 const snackbar = document.getElementById("snackbar");
 const snackbarText = document.getElementById("snackbar-text");
 const snackbarUndoBtn = document.getElementById("snackbar-undo");
+
+const photoLightbox = document.getElementById("photo-lightbox");
+const lightboxImg = document.getElementById("lightbox-img");
+const lightboxClose = document.getElementById("lightbox-close");
+const lightboxPrev = document.getElementById("lightbox-prev");
+const lightboxNext = document.getElementById("lightbox-next");
 
 let buildingsData = [];
 let map = null;
@@ -274,23 +281,13 @@ async function loadPlans(buildingCode, preferredFile) {
   currentBuildingCode = buildingCode;
   const building = buildingsData.find((b) => b.code === buildingCode);
   planSelect.innerHTML = "";
-  inventoryPlanFilter.innerHTML = '<option value="">Wszystkie</option>';
   if (!building) return;
   for (const p of building.plans) {
     const opt = document.createElement("option");
     opt.value = p.file;
     opt.textContent = p.name;
     planSelect.appendChild(opt);
-
-    const opt2 = document.createElement("option");
-    opt2.value = planKeyOf(buildingCode, p.file);
-    opt2.textContent = p.name;
-    inventoryPlanFilter.appendChild(opt2);
   }
-  exportCsvLink.onclick = (e) => {
-    e.preventDefault();
-    exportCsv(buildingCode);
-  };
   if (building.plans.length) {
     const chosen = (preferredFile && building.plans.find((p) => p.file === preferredFile)) || building.plans[0];
     planSelect.value = chosen.file;
@@ -452,6 +449,52 @@ function showSnackbar(message, onUndo) {
   snackbarTimer = setTimeout(() => snackbar.classList.add("hidden"), 6000);
 }
 
+// Pelnoekranowy podglad zdjecia (lightbox) - dziala i z panelu punktu, i z tabeli
+// Inwentaryzacji, dla dowolnego zestawu zdjec przekazanego jako photos[].
+let lightboxPhotos = [];
+let lightboxIndex = 0;
+let lightboxObjectUrl = null;
+
+function showLightboxPhoto() {
+  if (lightboxObjectUrl) URL.revokeObjectURL(lightboxObjectUrl);
+  lightboxObjectUrl = URL.createObjectURL(lightboxPhotos[lightboxIndex].blob);
+  lightboxImg.src = lightboxObjectUrl;
+  const multi = lightboxPhotos.length > 1;
+  lightboxPrev.classList.toggle("hidden", !multi);
+  lightboxNext.classList.toggle("hidden", !multi);
+}
+
+function openLightbox(photos, startIndex) {
+  if (!photos || !photos.length) return;
+  lightboxPhotos = photos;
+  lightboxIndex = startIndex || 0;
+  showLightboxPhoto();
+  photoLightbox.classList.remove("hidden");
+}
+
+function closeLightbox() {
+  photoLightbox.classList.add("hidden");
+  if (lightboxObjectUrl) {
+    URL.revokeObjectURL(lightboxObjectUrl);
+    lightboxObjectUrl = null;
+  }
+}
+
+lightboxClose.addEventListener("click", closeLightbox);
+photoLightbox.addEventListener("click", (e) => {
+  if (e.target === photoLightbox) closeLightbox(); // klik w tlo zamyka podglad
+});
+lightboxPrev.addEventListener("click", (e) => {
+  e.stopPropagation();
+  lightboxIndex = (lightboxIndex - 1 + lightboxPhotos.length) % lightboxPhotos.length;
+  showLightboxPhoto();
+});
+lightboxNext.addEventListener("click", (e) => {
+  e.stopPropagation();
+  lightboxIndex = (lightboxIndex + 1) % lightboxPhotos.length;
+  showLightboxPhoto();
+});
+
 function renderPhotoGallery(photos) {
   markerPhotoGallery.innerHTML = "";
   (photos || []).forEach((p, idx) => {
@@ -461,6 +504,7 @@ function renderPhotoGallery(photos) {
     const img = document.createElement("img");
     img.src = URL.createObjectURL(p.blob);
     img.alt = "zdjęcie punktu";
+    img.addEventListener("click", () => openLightbox(photos, idx));
 
     const del = document.createElement("button");
     del.type = "button";
@@ -777,9 +821,44 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 });
 
 // --- Inventory tab ---
+// Filtry budynku i kondygnacji sa niezalezne od tego, co jest akurat pokazane na mapie -
+// zakladka Inwentaryzacja moze pokazywac "Wszystkie" budynki / "Wszystkie" kondygnacje naraz.
+inventoryBuildingFilter.addEventListener("change", () => {
+  populateInventoryPlanFilter();
+  loadInventory();
+});
 inventoryPlanFilter.addEventListener("change", loadInventory);
 inventoryStatusFilter.addEventListener("change", loadInventory);
 inventoryCategoryFilter.addEventListener("change", loadInventory);
+
+function populateInventoryBuildingFilter() {
+  const current = inventoryBuildingFilter.value;
+  inventoryBuildingFilter.innerHTML = '<option value="">Wszystkie</option>';
+  for (const b of buildingsData) {
+    const opt = document.createElement("option");
+    opt.value = b.code;
+    opt.textContent = b.name;
+    inventoryBuildingFilter.appendChild(opt);
+  }
+  if (buildingsData.some((b) => b.code === current)) inventoryBuildingFilter.value = current;
+}
+
+function populateInventoryPlanFilter() {
+  const buildingCode = inventoryBuildingFilter.value;
+  const current = inventoryPlanFilter.value;
+  inventoryPlanFilter.innerHTML = '<option value="">Wszystkie</option>';
+  const relevantBuildings = buildingCode ? buildingsData.filter((b) => b.code === buildingCode) : buildingsData;
+  for (const b of relevantBuildings) {
+    for (const p of b.plans) {
+      const opt = document.createElement("option");
+      opt.value = planKeyOf(b.code, p.file);
+      opt.textContent = buildingCode ? p.name : `${b.code} — ${p.name}`;
+      inventoryPlanFilter.appendChild(opt);
+    }
+  }
+  const stillValid = Array.from(inventoryPlanFilter.options).some((o) => o.value === current);
+  inventoryPlanFilter.value = stillValid ? current : "";
+}
 
 async function refreshCategoryFilterOptions() {
   const cats = await knownCategories();
@@ -795,14 +874,18 @@ async function refreshCategoryFilterOptions() {
 }
 
 async function loadInventory() {
-  if (!currentBuildingCode) return;
+  if (!buildingsData.length) return;
+  populateInventoryBuildingFilter();
+  populateInventoryPlanFilter();
   await refreshCategoryFilterOptions();
+  const buildingFilter = inventoryBuildingFilter.value;
   const planKey = inventoryPlanFilter.value;
   const statusFilter = inventoryStatusFilter.value;
   const categoryFilter = inventoryCategoryFilter.value;
-  let markers = planKey
-    ? await dbGetMarkersByPlan(planKey)
-    : await dbGetMarkersByBuilding(currentBuildingCode);
+  let markers;
+  if (planKey) markers = await dbGetMarkersByPlan(planKey);
+  else if (buildingFilter) markers = await dbGetMarkersByBuilding(buildingFilter);
+  else markers = await dbGetAllMarkers();
   if (statusFilter === "open") markers = markers.filter((m) => !m.done);
   if (statusFilter === "done") markers = markers.filter((m) => !!m.done);
   if (categoryFilter) markers = markers.filter((m) => m.category === categoryFilter);
@@ -820,6 +903,7 @@ async function loadInventory() {
       : `<span class="status-chip open">Do zrobienia</span>`;
     tr.innerHTML = `
       <td>${idx + 1}</td>
+      <td>${m.buildingCode}</td>
       <td>${m.planName}</td>
       <td>${statusCell}</td>
       <td>${(m.category || "").replace(/</g, "&lt;")}</td>
@@ -828,6 +912,10 @@ async function loadInventory() {
       <td>${(m.createdAt || "").replace("T", " ").slice(0, 19)}</td>
       <td class="row-actions"><a data-id="${m.id}" data-plan="${m.planFile}">Pokaż na mapie</a></td>
     `;
+    if (m.photos && m.photos.length) {
+      const thumbImg = tr.querySelector("img.thumb");
+      if (thumbImg) thumbImg.addEventListener("click", () => openLightbox(m.photos, 0));
+    }
     tbody.appendChild(tr);
   });
   tbody.querySelectorAll("a[data-id]").forEach((a) => {
@@ -868,21 +956,26 @@ function downloadBlob(blob, filename) {
 }
 
 async function exportCsv(buildingCode) {
-  const markers = await dbGetMarkersByBuilding(buildingCode);
+  const markers = buildingCode ? await dbGetMarkersByBuilding(buildingCode) : await dbGetAllMarkers();
   markers.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
   const header = ["Budynek", "Plan", "Status", "Kategoria", "Uwagi", "X", "Y", "Utworzono", "Zaktualizowano"];
   const lines = [header.map(csvEscape).join(";")];
   for (const m of markers) {
     const status = m.done ? "Załatwione" : "Do zrobienia";
     lines.push(
-      [buildingCode, m.planName, status, m.category || "", m.note, m.x, m.y, m.createdAt, m.updatedAt]
+      [m.buildingCode, m.planName, status, m.category || "", m.note, m.x, m.y, m.createdAt, m.updatedAt]
         .map(csvEscape)
         .join(";")
     );
   }
   const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
-  downloadBlob(blob, `inwentaryzacja-${buildingCode}.csv`);
+  downloadBlob(blob, buildingCode ? `inwentaryzacja-${buildingCode}.csv` : "inwentaryzacja-wszystkie.csv");
 }
+
+exportCsvLink.addEventListener("click", (e) => {
+  e.preventDefault();
+  exportCsv(inventoryBuildingFilter.value || null);
+});
 
 // --- Backup: eksport/import JSON ---
 function blobToDataUrl(blob) {
@@ -1091,7 +1184,7 @@ async function renderPlanSection(doc, y, buildingCode, planFile, planName, marke
       doc.addPage();
       y = margin;
     }
-    doc.setFont("times", "bold");
+    doc.setFont("PTSerif", "bold");
     doc.setFontSize(11);
     doc.setTextColor(...BRAND);
     doc.text(planName, margin, y);
@@ -1115,11 +1208,11 @@ async function renderPlanSection(doc, y, buildingCode, planFile, planName, marke
   y += imgH + 8;
 
   doc.setTextColor(...BRAND);
-  doc.setFont("times", "bold");
+  doc.setFont("PTSerif", "bold");
   doc.setFontSize(10);
   doc.text("Legenda:", margin, y);
   y += 5;
-  doc.setFont("times", "normal");
+  doc.setFont("PTSerif", "normal");
   doc.setTextColor(20, 20, 20);
   doc.setFontSize(9);
 
@@ -1183,17 +1276,17 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
   const margin = 12;
-  doc.setFont("times", "normal");
+  doc.setFont("PTSerif", "normal");
 
   // pasek akcentu na gorze strony, nawiazujacy do SIW UPWr
   doc.setFillColor(...BRAND);
   doc.rect(0, 0, pageW, 4, "F");
 
   doc.setTextColor(...BRAND);
-  doc.setFont("times", "bold");
+  doc.setFont("PTSerif", "bold");
   doc.setFontSize(13);
   doc.text(`Inwentaryzacja — budynek ${buildingCode} — ${planName}`, margin, margin + 6);
-  doc.setFont("times", "normal");
+  doc.setFont("PTSerif", "normal");
   doc.setTextColor(90, 90, 90);
   doc.setFontSize(9);
   doc.text(`Wygenerowano: ${new Date().toLocaleString("pl-PL")}`, margin, margin + 11);
@@ -1241,11 +1334,11 @@ async function generateFullReport() {
 
     doc.setFillColor(...BRAND);
     doc.rect(0, 0, pageW, 4, "F");
-    doc.setFont("times", "bold");
+    doc.setFont("PTSerif", "bold");
     doc.setFontSize(14);
     doc.setTextColor(...BRAND);
     doc.text(`Budynek ${building.code} — ${building.name}`, margin, margin + 8);
-    doc.setFont("times", "normal");
+    doc.setFont("PTSerif", "normal");
     doc.setFontSize(8);
     doc.setTextColor(90, 90, 90);
     doc.text("Kategorie: czujki a zwierzęta pozostawione na noc; propozycja lokalizacji punktów dla ochroniarza", margin, margin + 13);
