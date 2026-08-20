@@ -110,6 +110,7 @@ const inventoryPlanFilter = document.getElementById("inventory-plan-filter");
 const inventoryStatusFilter = document.getElementById("inventory-status-filter");
 const inventoryCategoryFilter = document.getElementById("inventory-category-filter");
 const exportCsvLink = document.getElementById("export-csv-link");
+const fullReportBtn = document.getElementById("full-report-btn");
 const reportBtn = document.getElementById("report-btn");
 const backupBanner = document.getElementById("backup-banner");
 
@@ -878,19 +879,23 @@ importPlansInput.addEventListener("change", async () => {
 });
 
 // --- Raport PDF: mapka z ponumerowanymi punktami + legenda notatek ---
-async function generatePlanReport(buildingCode, planKey, planFile, planName) {
-  const markers = await dbGetMarkersByPlan(planKey);
-  markers.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
-  if (!markers.length) {
-    alert("Ten rzut nie ma jeszcze żadnych punktów do raportu.");
-    return;
-  }
+const BRAND = [120, 40, 52]; // Pantone 202C - System Identyfikacji Wizualnej UPWr
+const REPORT_CATEGORIES = [
+  "Czujki a zwierzęta pozostawione na noc",
+  "Propozycja lokalizacji punktów odbicia się dla ochroniarza",
+];
+
+// Rysuje w doc (od pozycji y) mapke z ponumerowanymi punktami i legende dla jednego
+// planu/kondygnacji. Wspoldzielone przez raport pojedynczego rzutu i raport zbiorczy
+// (wielu budynkow na raz) - obie wersje ukladaja tylko naglowki wokol tego bloku.
+async function renderPlanSection(doc, y, buildingCode, planFile, planName, markers, opts) {
+  const { pageW, pageH, margin, skipHeading } = opts;
+  const availW = pageW - margin * 2;
+  if (!markers.length) return y;
 
   const rec = await dbGetPlanImage(buildingCode, planFile);
-  if (!rec) {
-    alert("Nie znaleziono obrazka tego planu.");
-    return;
-  }
+  if (!rec) return y; // plan usuniety/niewczytany lokalnie - pomijamy sekcje, nie przerywamy calego raportu
+
   const url = URL.createObjectURL(rec.blob);
   const img = new Image();
   try {
@@ -920,9 +925,9 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
     // Leaflet (CRS.Simple) liczy y "od dolu w gore" (jak szerokosc geograficzna),
     // a canvas/obrazek "od gory w dol" - trzeba odwrocic os Y przy przenoszeniu.
     const x = m.x * scale;
-    const y = (img.naturalHeight - m.y) * scale;
+    const py = (img.naturalHeight - m.y) * scale;
     ctx.beginPath();
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.arc(x, py, radius, 0, Math.PI * 2);
     ctx.fillStyle = m.done ? "#16a34a" : "#782834";
     ctx.fill();
     ctx.lineWidth = Math.max(2, radius * 0.15);
@@ -932,35 +937,24 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
     ctx.font = `bold ${Math.round(radius * 1.1)}px sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(String(num), x, y + 1);
+    ctx.fillText(String(num), x, py + 1);
   });
 
   const mapImageData = canvas.toDataURL("image/jpeg", 0.85);
 
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ unit: "mm", format: "a4" });
-  const pageW = doc.internal.pageSize.getWidth();
-  const pageH = doc.internal.pageSize.getHeight();
-  const margin = 12;
-  const BRAND = [120, 40, 52]; // Pantone 202C - System Identyfikacji Wizualnej UPWr
-  doc.setFont("times", "normal");
+  if (!skipHeading) {
+    if (y + 10 > pageH - margin) {
+      doc.addPage();
+      y = margin;
+    }
+    doc.setFont("times", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(...BRAND);
+    doc.text(planName, margin, y);
+    y += 6;
+  }
 
-  // pasek akcentu na gorze strony, nawiazujacy do SIW UPWr
-  doc.setFillColor(...BRAND);
-  doc.rect(0, 0, pageW, 4, "F");
-
-  doc.setTextColor(...BRAND);
-  doc.setFont("times", "bold");
-  doc.setFontSize(13);
-  doc.text(`Inwentaryzacja — budynek ${buildingCode} — ${planName}`, margin, margin + 6);
-  doc.setFont("times", "normal");
-  doc.setTextColor(90, 90, 90);
-  doc.setFontSize(9);
-  doc.text(`Wygenerowano: ${new Date().toLocaleString("pl-PL")}`, margin, margin + 11);
-  doc.setTextColor(20, 20, 20);
-
-  const availW = pageW - margin * 2;
-  const maxImgH = pageH * 0.55;
+  const maxImgH = pageH * (skipHeading ? 0.55 : 0.45);
   const imgRatio = ch / cw;
   let imgW = availW;
   let imgH = imgW * imgRatio;
@@ -968,16 +962,19 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
     imgH = maxImgH;
     imgW = imgH / imgRatio;
   }
+  if (y + imgH > pageH - margin) {
+    doc.addPage();
+    y = margin;
+  }
   const imgX = margin + (availW - imgW) / 2;
-  const imgY = margin + 16;
-  doc.addImage(mapImageData, "JPEG", imgX, imgY, imgW, imgH);
+  doc.addImage(mapImageData, "JPEG", imgX, y, imgW, imgH);
+  y += imgH + 8;
 
-  let y = imgY + imgH + 10;
   doc.setTextColor(...BRAND);
   doc.setFont("times", "bold");
-  doc.setFontSize(11);
+  doc.setFontSize(10);
   doc.text("Legenda:", margin, y);
-  y += 6;
+  y += 5;
   doc.setFont("times", "normal");
   doc.setTextColor(20, 20, 20);
   doc.setFontSize(9);
@@ -1026,8 +1023,108 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
     y += 4;
   }
 
+  return y + 6; // odstep przed kolejnym planem/budynkiem w raporcie zbiorczym
+}
+
+async function generatePlanReport(buildingCode, planKey, planFile, planName) {
+  const markers = await dbGetMarkersByPlan(planKey);
+  markers.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+  if (!markers.length) {
+    alert("Ten rzut nie ma jeszcze żadnych punktów do raportu.");
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 12;
+  doc.setFont("times", "normal");
+
+  // pasek akcentu na gorze strony, nawiazujacy do SIW UPWr
+  doc.setFillColor(...BRAND);
+  doc.rect(0, 0, pageW, 4, "F");
+
+  doc.setTextColor(...BRAND);
+  doc.setFont("times", "bold");
+  doc.setFontSize(13);
+  doc.text(`Inwentaryzacja — budynek ${buildingCode} — ${planName}`, margin, margin + 6);
+  doc.setFont("times", "normal");
+  doc.setTextColor(90, 90, 90);
+  doc.setFontSize(9);
+  doc.text(`Wygenerowano: ${new Date().toLocaleString("pl-PL")}`, margin, margin + 11);
+  doc.setTextColor(20, 20, 20);
+
+  await renderPlanSection(doc, margin + 20, buildingCode, planFile, planName, markers, {
+    pageW,
+    pageH,
+    margin,
+    skipHeading: true,
+  });
+
   doc.save(`raport-${buildingCode}-${planName}.pdf`.replace(/[\\/:*?"<>|]/g, "_"));
 }
+
+// Raport zbiorczy: wszystkie budynki na raz, kazdy budynek od nowej strony, tylko
+// punkty w kategoriach "czujki" i "propozycja lokalizacji dla ochroniarza".
+async function generateFullReport() {
+  const allMarkers = await dbGetAllMarkers();
+  const filtered = allMarkers.filter((m) => REPORT_CATEGORIES.includes(m.category));
+  if (!filtered.length) {
+    alert('Brak punktów w kategoriach "czujki" / "lokalizacja dla ochroniarza" do raportu.');
+    return;
+  }
+
+  const byBuilding = {};
+  for (const m of filtered) {
+    (byBuilding[m.buildingCode] = byBuilding[m.buildingCode] || []).push(m);
+  }
+  const buildingsWithMarkers = buildingsData.filter((b) => byBuilding[b.code] && byBuilding[b.code].length);
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 12;
+  const stamp = new Date().toLocaleString("pl-PL");
+
+  // Jedna sekwencyjna petla (header + tresc na biezaco, z await) - addPage() w jsPDF
+  // zawsze dokleja strone na koncu dokumentu, wiec budynki i ich ewentualne "przelewki"
+  // tresci musza powstawac w scislej kolejnosci, a nie w dwoch osobnych przebiegach.
+  for (let bi = 0; bi < buildingsWithMarkers.length; bi++) {
+    const building = buildingsWithMarkers[bi];
+    if (bi > 0) doc.addPage();
+
+    doc.setFillColor(...BRAND);
+    doc.rect(0, 0, pageW, 4, "F");
+    doc.setFont("times", "bold");
+    doc.setFontSize(14);
+    doc.setTextColor(...BRAND);
+    doc.text(`Budynek ${building.code} — ${building.name}`, margin, margin + 8);
+    doc.setFont("times", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(90, 90, 90);
+    doc.text("Kategorie: czujki a zwierzęta pozostawione na noc; propozycja lokalizacji punktów dla ochroniarza", margin, margin + 13);
+    doc.text(`Wygenerowano: ${stamp}`, margin, margin + 17);
+    doc.setTextColor(20, 20, 20);
+
+    let y = margin + 24;
+    const byPlan = {};
+    for (const m of byBuilding[building.code]) (byPlan[m.planFile] = byPlan[m.planFile] || []).push(m);
+
+    for (const plan of building.plans) {
+      const planMarkers = byPlan[plan.file];
+      if (!planMarkers || !planMarkers.length) continue;
+      planMarkers.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+      y = await renderPlanSection(doc, y, building.code, plan.file, plan.name, planMarkers, { pageW, pageH, margin });
+    }
+  }
+
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  doc.save(`raport-zbiorczy-czujki-ochrona-${dateStamp}.pdf`);
+}
+
+fullReportBtn.addEventListener("click", generateFullReport);
 
 // --- Service worker + PWA install ---
 if ("serviceWorker" in navigator) {
