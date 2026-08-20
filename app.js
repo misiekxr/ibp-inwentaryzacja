@@ -1,13 +1,18 @@
 const { openDB } = idb;
 
-const dbPromise = openDB("ibp-db", 1, {
-  upgrade(db) {
-    const markers = db.createObjectStore("markers", { keyPath: "id", autoIncrement: true });
-    markers.createIndex("by-plan", "planKey");
-    markers.createIndex("by-building", "buildingCode");
-    db.createObjectStore("meta", { keyPath: "key" });
-    const planImages = db.createObjectStore("planImages", { keyPath: "key" });
-    planImages.createIndex("by-building", "buildingCode");
+const dbPromise = openDB("ibp-db", 2, {
+  upgrade(db, oldVersion) {
+    if (oldVersion < 1) {
+      const markers = db.createObjectStore("markers", { keyPath: "id", autoIncrement: true });
+      markers.createIndex("by-plan", "planKey");
+      markers.createIndex("by-building", "buildingCode");
+      db.createObjectStore("meta", { keyPath: "key" });
+      const planImages = db.createObjectStore("planImages", { keyPath: "key" });
+      planImages.createIndex("by-building", "buildingCode");
+    }
+    if (oldVersion < 2) {
+      db.createObjectStore("symbolTypes", { keyPath: "id", autoIncrement: true });
+    }
   },
 });
 
@@ -103,6 +108,156 @@ async function dbGetAllPlanImages() {
   return db.getAll("planImages");
 }
 
+async function dbAddSymbolType(type) {
+  const db = await dbPromise;
+  const id = await db.add("symbolTypes", type);
+  return { ...type, id };
+}
+
+async function dbGetAllSymbolTypes() {
+  const db = await dbPromise;
+  return db.getAll("symbolTypes");
+}
+
+async function dbDeleteSymbolType(id) {
+  const db = await dbPromise;
+  await db.delete("symbolTypes", id);
+}
+
+// 5 wbudowanych symboli PPOZ jako proste SVG (rysowane raz, przy pierwszym starcie appki
+// na danym urzadzeniu - potem zyja jako zwykle rekordy w symbolTypes, tak jak wlasne typy
+// uzytkownika). Drzwi = standardowy architektoniczny symbol (skrzydlo + luk otwarcia).
+// Gasnica/hydranty = czerwone tlo + uproszczony bialy piktogram, w duchu znakow PPOZ.
+const DEFAULT_SYMBOL_TYPES = [
+  {
+    name: "Drzwi pojedyncze",
+    builtin: true,
+    iconKind: "svg",
+    svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><line x1="10" y1="90" x2="10" y2="15" stroke="black" stroke-width="5"/><path d="M10 15 A 75 75 0 0 1 85 90" fill="none" stroke="black" stroke-width="2.5" stroke-dasharray="5 4"/></svg>',
+  },
+  {
+    name: "Drzwi podwójne",
+    builtin: true,
+    iconKind: "svg",
+    svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><line x1="5" y1="90" x2="5" y2="20" stroke="black" stroke-width="5"/><path d="M5 20 A 70 70 0 0 1 50 90" fill="none" stroke="black" stroke-width="2.5" stroke-dasharray="5 4"/><line x1="95" y1="90" x2="95" y2="20" stroke="black" stroke-width="5"/><path d="M95 20 A 70 70 0 0 0 50 90" fill="none" stroke="black" stroke-width="2.5" stroke-dasharray="5 4"/></svg>',
+  },
+  {
+    name: "Gaśnica",
+    builtin: true,
+    iconKind: "svg",
+    svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="4" y="4" width="92" height="92" rx="10" fill="#c8102e"/><rect x="42" y="35" width="20" height="45" rx="6" fill="white"/><rect x="46" y="20" width="12" height="16" rx="3" fill="white"/><path d="M40 26 h24" stroke="white" stroke-width="4" stroke-linecap="round"/><path d="M42 40 C 25 45, 22 60, 30 72" stroke="white" stroke-width="4" fill="none" stroke-linecap="round"/></svg>',
+  },
+  {
+    name: "Hydrant wewnętrzny",
+    builtin: true,
+    iconKind: "svg",
+    svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="4" y="4" width="92" height="92" rx="10" fill="#c8102e"/><circle cx="42" cy="45" r="22" fill="none" stroke="white" stroke-width="5"/><circle cx="42" cy="45" r="7" fill="white"/><path d="M60 60 C 75 68, 80 78, 78 88" stroke="white" stroke-width="5" fill="none" stroke-linecap="round"/></svg>',
+  },
+  {
+    name: "Hydrant zewnętrzny",
+    builtin: true,
+    iconKind: "svg",
+    svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="4" y="4" width="92" height="92" rx="10" fill="#c8102e"/><rect x="40" y="30" width="20" height="40" rx="4" fill="white"/><ellipse cx="50" cy="28" rx="13" ry="8" fill="white"/><rect x="26" y="42" width="12" height="10" rx="3" fill="white"/><rect x="62" y="42" width="12" height="10" rx="3" fill="white"/><rect x="38" y="70" width="24" height="8" rx="2" fill="white"/></svg>',
+  },
+];
+
+function symbolIconSrc(type) {
+  if (type.iconKind === "svg") return "data:image/svg+xml;utf8," + encodeURIComponent(type.svg);
+  return URL.createObjectURL(type.imageBlob);
+}
+
+async function loadSymbolTypes() {
+  let types = await dbGetAllSymbolTypes();
+  if (!types.length) {
+    for (const t of DEFAULT_SYMBOL_TYPES) await dbAddSymbolType(t);
+    types = await dbGetAllSymbolTypes();
+  }
+  symbolTypesData = types;
+  symbolIconCache.clear();
+  for (const t of types) symbolIconCache.set(t.id, symbolIconSrc(t));
+}
+
+function setPlacementMode(id, label) {
+  placementMode = id;
+  paletteCurrentLabel.textContent = label;
+  symbolPaletteList.classList.add("hidden");
+  renderSymbolPalette();
+}
+
+// Paleta: "Punkt" (domyslny) + kazdy typ symbolu (wbudowany albo wlasny) + formularz
+// dodania nowego typu. Wybrany tryb zostaje aktywny miedzy kliknieciami na mapie, zeby
+// mozna bylo postawic kilka tych samych symboli pod rzad bez przelaczania za kazdym razem.
+function renderSymbolPalette() {
+  symbolPaletteList.innerHTML = "";
+
+  const pointBtn = document.createElement("button");
+  pointBtn.type = "button";
+  pointBtn.className = "palette-item" + (placementMode === null ? " active" : "");
+  pointBtn.innerHTML = '<span class="palette-dot"></span><span>Punkt (notatka)</span>';
+  pointBtn.addEventListener("click", () => setPlacementMode(null, "Punkt"));
+  symbolPaletteList.appendChild(pointBtn);
+
+  for (const t of symbolTypesData) {
+    const row = document.createElement("div");
+    row.className = "palette-type-row";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "palette-item" + (placementMode === t.id ? " active" : "");
+    btn.innerHTML = `<img class="palette-icon" src="${symbolIconCache.get(t.id)}" alt="">` +
+      `<span>${t.name}</span>`;
+    btn.addEventListener("click", () => setPlacementMode(t.id, t.name));
+    row.appendChild(btn);
+
+    if (!t.builtin) {
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "palette-type-del";
+      del.textContent = "×";
+      del.title = "Usuń ten typ symbolu";
+      del.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const allMarkers = await dbGetAllMarkers();
+        const inUse = allMarkers.some((m) => m.symbolTypeId === t.id);
+        if (inUse) {
+          alert(`Nie można usunąć „${t.name}” — jest użyty na co najmniej jednym punkcie. Usuń najpierw te punkty albo zmień im typ.`);
+          return;
+        }
+        if (!confirm(`Usunąć typ symbolu „${t.name}”?`)) return;
+        await dbDeleteSymbolType(t.id);
+        if (placementMode === t.id) placementMode = null;
+        await loadSymbolTypes();
+        renderSymbolPalette();
+      });
+      row.appendChild(del);
+    }
+
+    symbolPaletteList.appendChild(row);
+  }
+
+  const addForm = document.createElement("div");
+  addForm.className = "palette-add-form";
+  addForm.innerHTML =
+    '<input type="text" id="new-symbol-name" placeholder="Nazwa nowego symbolu">' +
+    '<input type="file" id="new-symbol-file" accept="image/*">' +
+    '<button type="button" id="new-symbol-save" class="secondary">+ Dodaj nowy typ symbolu</button>';
+  symbolPaletteList.appendChild(addForm);
+
+  document.getElementById("new-symbol-save").addEventListener("click", async () => {
+    const nameInput = document.getElementById("new-symbol-name");
+    const fileInput = document.getElementById("new-symbol-file");
+    const name = nameInput.value.trim();
+    const file = fileInput.files && fileInput.files[0];
+    if (!name || !file) {
+      alert("Podaj nazwę i wybierz obrazek.");
+      return;
+    }
+    const added = await dbAddSymbolType({ name, builtin: false, iconKind: "image", imageBlob: file });
+    await loadSymbolTypes();
+    setPlacementMode(added.id, added.name);
+  });
+}
+
 // --- DOM ---
 const buildingSelect = document.getElementById("building-select");
 const planSelect = document.getElementById("plan-select");
@@ -113,6 +268,9 @@ const inventoryCategoryFilter = document.getElementById("inventory-category-filt
 const exportCsvLink = document.getElementById("export-csv-link");
 const fullReportBtn = document.getElementById("full-report-btn");
 const reportBtn = document.getElementById("report-btn");
+const symbolPaletteToggle = document.getElementById("symbol-palette-toggle");
+const symbolPaletteList = document.getElementById("symbol-palette-list");
+const paletteCurrentLabel = document.getElementById("palette-current-label");
 const backupBanner = document.getElementById("backup-banner");
 
 const markerPanel = document.getElementById("marker-panel");
@@ -122,6 +280,10 @@ const markerCategory = document.getElementById("marker-category");
 const markerCategoryCustom = document.getElementById("marker-category-custom");
 const manageCategoriesBtn = document.getElementById("manage-categories-btn");
 const categoryManageList = document.getElementById("category-manage-list");
+const symbolRotateRow = document.getElementById("symbol-rotate-row");
+const symbolRotateLeftBtn = document.getElementById("symbol-rotate-left");
+const symbolRotateRightBtn = document.getElementById("symbol-rotate-right");
+const symbolMirrorBtn = document.getElementById("symbol-mirror");
 const markerNote = document.getElementById("marker-note");
 const markerPhotoCamera = document.getElementById("marker-photo-camera");
 const markerPhotoGalleryInput = document.getElementById("marker-photo-gallery-input");
@@ -159,6 +321,13 @@ let currentPlanName = null;
 let editingMarkerId = null;
 let noteDebounceTimer = null;
 let currentPlanObjectUrl = null;
+let symbolTypesData = [];
+const symbolIconCache = new Map(); // symbolTypeId -> src (data: albo blob: URL)
+let placementMode = null; // null = zwykly punkt, albo id typu symbolu do stawiania
+
+symbolPaletteToggle.addEventListener("click", () => {
+  symbolPaletteList.classList.toggle("hidden");
+});
 
 function planKeyOf(buildingCode, file) {
   return `${buildingCode}::${file}`;
@@ -273,14 +442,33 @@ manageCategoriesBtn.addEventListener("click", async () => {
 // setIcon() tworzy nowy element ikony i po drodze potrafi urwac wlasne sciezki
 // zdarzen Leaflet (m.in. przeciaganie), co bylo przyczyna buga "wibracja dziala,
 // nic wiecej sie nie dzieje".
-function makeIcon(hasPhoto, done) {
-  const badge = hasPhoto
+function makeIcon(m) {
+  const hasPhoto = !!(m.photos && m.photos.length);
+  const done = !!m.done;
+  const photoBadge = hasPhoto
     ? `<div style="position:absolute;top:-4px;right:-4px;font-size:9px;line-height:1;">📷</div>`
     : "";
+  const unlockDotHtml = `<div class="marker-unlock-dot" style="display:none;position:absolute;bottom:-3px;left:-3px;width:9px;height:9px;border-radius:50%;background:#dc2626;border:1.5px solid white;"></div>`;
+
+  if (m.symbolTypeId != null && symbolIconCache.has(m.symbolTypeId)) {
+    const src = symbolIconCache.get(m.symbolTypeId);
+    const transform = `rotate(${m.rotation || 0}deg)${m.mirrored ? " scaleX(-1)" : ""}`;
+    const statusDot = `<div style="position:absolute;top:-3px;left:-3px;width:9px;height:9px;border-radius:50%;background:${done ? "#16a34a" : "#782834"};border:1.5px solid white;"></div>`;
+    return L.divIcon({
+      className: "",
+      html: `<div style="position:relative;width:30px;height:30px;">
+        <img src="${src}" style="width:100%;height:100%;display:block;transform:${transform};" />
+        ${statusDot}${photoBadge}${unlockDotHtml}
+      </div>`,
+      iconSize: [30, 30],
+      iconAnchor: [15, 15],
+    });
+  }
+
   const color = done ? "#16a34a" : "#782834";
   return L.divIcon({
     className: "",
-    html: `<div style="position:relative;width:16px;height:16px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 3px rgba(0,0,0,0.5);">${badge}<div class="marker-unlock-dot" style="display:none;position:absolute;bottom:-3px;left:-3px;width:9px;height:9px;border-radius:50%;background:#dc2626;border:1.5px solid white;"></div></div>`,
+    html: `<div style="position:relative;width:16px;height:16px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 3px rgba(0,0,0,0.5);">${photoBadge}${unlockDotHtml}</div>`,
     iconSize: [16, 16],
     iconAnchor: [8, 8],
   });
@@ -406,7 +594,7 @@ async function selectPlan(buildingCode, file, name) {
 
 function addLeafletMarker(m) {
   const marker = L.marker([m.y, m.x], {
-    icon: makeIcon(!!(m.photos && m.photos.length), !!m.done),
+    icon: makeIcon(m),
     draggable: false,
   });
   marker.markerData = m;
@@ -620,19 +808,27 @@ async function onMapClick(e) {
     category: "",
     photos: [],
     done: false,
+    symbolTypeId: placementMode,
+    rotation: 0,
+    mirrored: false,
     createdAt: now,
     updatedAt: now,
   });
   addLeafletMarker(marker);
-  openMarkerPanel(marker);
+  // Zwykly punkt od razu otwiera panel (jak dotad). Symbol NIE otwiera panelu
+  // automatycznie - pozwala szybko postawic kilka tych samych symboli pod rzad
+  // bez przerywania; nadal zapisuje sie natychmiast w bazie.
+  if (!placementMode) openMarkerPanel(marker);
 }
 
 async function openMarkerPanel(m) {
   editingMarkerId = m.id;
-  markerPanelTitle.textContent = `Punkt #${m.id}`;
+  const symbolType = m.symbolTypeId != null ? symbolTypesData.find((t) => t.id === m.symbolTypeId) : null;
+  markerPanelTitle.textContent = symbolType ? `${symbolType.name} #${m.id}` : `Punkt #${m.id}`;
   markerDone.checked = !!m.done;
   await populateCategorySelect(m.category || "");
   categoryManageList.classList.add("hidden");
+  symbolRotateRow.classList.toggle("hidden", !symbolType);
   markerNote.value = m.note || "";
   markerPhotoCamera.value = "";
   markerPhotoGalleryInput.value = "";
@@ -642,12 +838,43 @@ async function openMarkerPanel(m) {
   markerNote.focus();
 }
 
+async function updateSymbolTransform(changes) {
+  if (editingMarkerId == null) return;
+  const id = editingMarkerId;
+  const updated = await dbUpdateMarker(id, { ...changes, updatedAt: new Date().toISOString() });
+  if (updated && editingMarkerId === id) {
+    refreshLeafletMarker(updated);
+    setSaveStatus("Zapisano", false);
+  }
+}
+
+symbolRotateLeftBtn.addEventListener("click", async () => {
+  if (editingMarkerId == null) return;
+  const m = await dbGetMarker(editingMarkerId);
+  if (!m) return;
+  await updateSymbolTransform({ rotation: ((m.rotation || 0) - 90 + 360) % 360 });
+});
+symbolRotateRightBtn.addEventListener("click", async () => {
+  if (editingMarkerId == null) return;
+  const m = await dbGetMarker(editingMarkerId);
+  if (!m) return;
+  await updateSymbolTransform({ rotation: ((m.rotation || 0) + 90) % 360 });
+});
+symbolMirrorBtn.addEventListener("click", async () => {
+  if (editingMarkerId == null) return;
+  const m = await dbGetMarker(editingMarkerId);
+  if (!m) return;
+  await updateSymbolTransform({ mirrored: !m.mirrored });
+});
+
 async function closeMarkerPanel() {
   if (editingMarkerId != null) {
     const m = await dbGetMarker(editingMarkerId);
     // porzadek: pusty punkt (bez notatki i zdjecia) usuwamy, zeby przypadkowe
-    // tapniecie na mape nie zostawialo "widmowych" pinezek
-    if (m && !(m.note || "").trim() && !(m.photos && m.photos.length)) {
+    // tapniecie na mape nie zostawialo "widmowych" pinezek - ale NIE dotyczy to
+    // symboli (drzwi/gasnica/hydrant), ktore sa uzyteczne samą swoja obecnoscia
+    // na planie nawet bez notatki
+    if (m && !m.symbolTypeId && !(m.note || "").trim() && !(m.photos && m.photos.length)) {
       await dbDeleteMarker(editingMarkerId);
       const old = leafletMarkers[editingMarkerId];
       if (old) map.removeLayer(old);
@@ -1040,12 +1267,14 @@ function downloadBlob(blob, filename) {
 async function exportCsv(buildingCode) {
   const markers = buildingCode ? await dbGetMarkersByBuilding(buildingCode) : await dbGetAllMarkers();
   markers.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
-  const header = ["Budynek", "Plan", "Status", "Kategoria", "Uwagi", "X", "Y", "Utworzono", "Zaktualizowano"];
+  const header = ["Budynek", "Plan", "Typ", "Status", "Kategoria", "Uwagi", "X", "Y", "Utworzono", "Zaktualizowano"];
   const lines = [header.map(csvEscape).join(";")];
   for (const m of markers) {
     const status = m.done ? "Załatwione" : "Do zrobienia";
+    const symbolType = m.symbolTypeId != null ? symbolTypesData.find((t) => t.id === m.symbolTypeId) : null;
+    const typeName = symbolType ? symbolType.name : "Punkt";
     lines.push(
-      [m.buildingCode, m.planName, status, m.category || "", m.note, m.x, m.y, m.createdAt, m.updatedAt]
+      [m.buildingCode, m.planName, typeName, status, m.category || "", m.note, m.x, m.y, m.createdAt, m.updatedAt]
         .map(csvEscape)
         .join(";")
     );
@@ -1254,12 +1483,57 @@ async function renderPlanSection(doc, y, buildingCode, planFile, planName, marke
   ctx.drawImage(img, 0, 0, cw, ch);
 
   const radius = Math.max(10, Math.round(cw * 0.012));
-  markers.forEach((m, idx) => {
+  const symbolImgCache = new Map(); // symbolTypeId -> zaladowany Image (raz na raport)
+  async function loadSymbolImage(typeId) {
+    if (symbolImgCache.has(typeId)) return symbolImgCache.get(typeId);
+    const src = symbolIconCache.get(typeId);
+    const loaded = src
+      ? await new Promise((resolve) => {
+          const image = new Image();
+          image.onload = () => resolve(image);
+          image.onerror = () => resolve(null);
+          image.src = src;
+        })
+      : null;
+    symbolImgCache.set(typeId, loaded);
+    return loaded;
+  }
+
+  for (let idx = 0; idx < markers.length; idx++) {
+    const m = markers[idx];
     const num = idx + 1;
     // Leaflet (CRS.Simple) liczy y "od dolu w gore" (jak szerokosc geograficzna),
     // a canvas/obrazek "od gory w dol" - trzeba odwrocic os Y przy przenoszeniu.
     const x = m.x * scale;
     const py = (img.naturalHeight - m.y) * scale;
+
+    const symImg = m.symbolTypeId != null ? await loadSymbolImage(m.symbolTypeId) : null;
+    if (symImg) {
+      const size = radius * 3.2;
+      ctx.save();
+      ctx.translate(x, py);
+      ctx.rotate(((m.rotation || 0) * Math.PI) / 180);
+      if (m.mirrored) ctx.scale(-1, 1);
+      ctx.drawImage(symImg, -size / 2, -size / 2, size, size);
+      ctx.restore();
+      // numer symbolu w malym kolku obok, zeby nadal dalo sie powiazac z legenda
+      const bx = x + size / 2 - radius * 0.5;
+      const by = py - size / 2 + radius * 0.5;
+      ctx.beginPath();
+      ctx.arc(bx, by, radius * 0.55, 0, Math.PI * 2);
+      ctx.fillStyle = m.done ? "#16a34a" : "#782834";
+      ctx.fill();
+      ctx.lineWidth = Math.max(1.5, radius * 0.1);
+      ctx.strokeStyle = "white";
+      ctx.stroke();
+      ctx.fillStyle = "white";
+      ctx.font = `bold ${Math.round(radius * 0.65)}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(num), bx, by + 1);
+      continue;
+    }
+
     ctx.beginPath();
     ctx.arc(x, py, radius, 0, Math.PI * 2);
     ctx.fillStyle = m.done ? "#16a34a" : "#782834";
@@ -1272,7 +1546,7 @@ async function renderPlanSection(doc, y, buildingCode, planFile, planName, marke
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(String(num), x, py + 1);
-  });
+  }
 
   const mapImageData = canvas.toDataURL("image/jpeg", 0.85);
 
@@ -1469,6 +1743,8 @@ if ("serviceWorker" in navigator) {
 
 // --- Start ---
 (async function init() {
+  await loadSymbolTypes();
+  renderSymbolPalette();
   await loadBuildings();
   await refreshBackupInfo();
 })();

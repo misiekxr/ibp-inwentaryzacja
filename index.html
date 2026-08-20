@@ -41,6 +41,12 @@
       <p>Przejdź do zakładki <strong>Kopia zapasowa</strong> i wczytaj plik planów (np. plany-B1.json).</p>
     </div>
     <div id="map"></div>
+    <div id="symbol-palette" class="symbol-palette">
+      <button type="button" id="symbol-palette-toggle" class="palette-toggle" title="Wybierz co stawiać na mapie po dotknięciu">
+        Stawiam: <span id="palette-current-label">Punkt</span>
+      </button>
+      <div id="symbol-palette-list" class="symbol-palette-list hidden"></div>
+    </div>
     <button id="report-btn" class="fab hidden" title="Raport tego rzutu (PDF)">Raport</button>
     <div id="marker-panel" class="hidden">
       <h3 id="marker-panel-title">Punkt</h3>
@@ -54,6 +60,11 @@
       <input type="text" id="marker-category-custom" class="hidden" placeholder="Wpisz nową kategorię i zatwierdź Enter">
       <button type="button" id="manage-categories-btn" class="link-btn">Zarządzaj kategoriami</button>
       <div id="category-manage-list" class="category-manage-list hidden"></div>
+      <div id="symbol-rotate-row" class="symbol-rotate-row hidden">
+        <button type="button" id="symbol-rotate-left" class="secondary" title="Obróć w lewo o 90°">↺ 90°</button>
+        <button type="button" id="symbol-rotate-right" class="secondary" title="Obróć w prawo o 90°">↻ 90°</button>
+        <button type="button" id="symbol-mirror" class="secondary" title="Odbij lustrzanie">⇄ Lustro</button>
+      </div>
       <label>Uwagi
         <textarea id="marker-note" rows="4" placeholder="Opis, uwagi..."></textarea>
       </label>

@@ -148,6 +148,119 @@ main {
   box-shadow: 0 4px 12px rgba(0,0,0,0.25);
 }
 
+.symbol-palette {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 900;
+}
+
+.palette-toggle {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  color: var(--text);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.palette-toggle span { font-weight: 600; color: var(--accent); }
+
+.symbol-palette-list {
+  margin-top: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 60vh;
+  overflow-y: auto;
+  width: 230px;
+  max-width: calc(100vw - 32px);
+}
+
+.symbol-palette-list.hidden { display: none; }
+
+.palette-type-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.palette-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: none;
+  cursor: pointer;
+  font-size: 0.84rem;
+  color: var(--text);
+  text-align: left;
+}
+
+.palette-item:hover { background: var(--bg); }
+
+.palette-item.active {
+  border-color: var(--accent);
+  background: #f1dde1;
+}
+
+.palette-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.palette-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.palette-type-del {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  line-height: 20px;
+  border-radius: 50%;
+  background: white;
+  color: var(--danger);
+  border-color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.palette-add-form {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.palette-add-form input[type="text"] {
+  font-size: 0.82rem;
+  width: 100%;
+}
+
+.palette-add-form input[type="file"] {
+  font-size: 0.75rem;
+  padding: 4px;
+}
+
 #marker-panel {
   position: absolute;
   top: 12px;
@@ -263,6 +376,17 @@ main {
 .photo-add-row {
   display: flex;
   gap: 8px;
+}
+
+.symbol-rotate-row {
+  display: flex;
+  gap: 8px;
+}
+
+.symbol-rotate-row button {
+  flex: 1;
+  font-size: 0.82rem;
+  padding: 8px 6px;
 }
 
 .photo-add-btn {
