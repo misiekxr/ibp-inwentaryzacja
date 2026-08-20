@@ -1,6 +1,6 @@
 {
-  "name": "Inwentaryzacja IBP",
-  "short_name": "IBP",
+  "name": "OCHRONA_PPOŻ",
+  "short_name": "OCHRONA_PPOŻ",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
