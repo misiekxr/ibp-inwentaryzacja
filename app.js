@@ -108,6 +108,7 @@ const buildingSelect = document.getElementById("building-select");
 const planSelect = document.getElementById("plan-select");
 const inventoryPlanFilter = document.getElementById("inventory-plan-filter");
 const inventoryStatusFilter = document.getElementById("inventory-status-filter");
+const inventoryCategoryFilter = document.getElementById("inventory-category-filter");
 const exportCsvLink = document.getElementById("export-csv-link");
 const reportBtn = document.getElementById("report-btn");
 const backupBanner = document.getElementById("backup-banner");
@@ -115,6 +116,8 @@ const backupBanner = document.getElementById("backup-banner");
 const markerPanel = document.getElementById("marker-panel");
 const markerPanelTitle = document.getElementById("marker-panel-title");
 const markerDone = document.getElementById("marker-done");
+const markerCategory = document.getElementById("marker-category");
+const markerCategoryCustom = document.getElementById("marker-category-custom");
 const markerNote = document.getElementById("marker-note");
 const markerPhotoCamera = document.getElementById("marker-photo-camera");
 const markerPhotoGalleryInput = document.getElementById("marker-photo-gallery-input");
@@ -145,6 +148,49 @@ let currentPlanObjectUrl = null;
 
 function planKeyOf(buildingCode, file) {
   return `${buildingCode}::${file}`;
+}
+
+const DEFAULT_CATEGORIES = [
+  "Czujki a zwierzęta pozostawione na noc",
+  "Propozycja lokalizacji punktów odbicia się dla ochroniarza",
+  "Aktualizacja planów IBP",
+];
+
+// Lista kategorii = kategorie domyslne + wszystkie juz uzyte w bazie (np. wpisane
+// recznie przez "+ Nowa kategoria") - dzieki temu raz wpisana kategoria pojawia sie
+// pozniej sama w liscie, bez potrzeby wpisywania jej ponownie za kazdym razem.
+async function knownCategories() {
+  const markers = await dbGetAllMarkers();
+  const set = new Set(DEFAULT_CATEGORIES);
+  for (const m of markers) if (m.category) set.add(m.category);
+  return Array.from(set).sort((a, b) => a.localeCompare(b, "pl"));
+}
+
+async function populateCategorySelect(selected) {
+  const cats = await knownCategories();
+  markerCategory.innerHTML = "";
+  const optNone = document.createElement("option");
+  optNone.value = "";
+  optNone.textContent = "(brak)";
+  markerCategory.appendChild(optNone);
+  for (const c of cats) {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    markerCategory.appendChild(opt);
+  }
+  const optCustom = document.createElement("option");
+  optCustom.value = "__custom__";
+  optCustom.textContent = "+ Nowa kategoria…";
+  markerCategory.appendChild(optCustom);
+
+  if (selected && cats.includes(selected)) {
+    markerCategory.value = selected;
+    markerCategoryCustom.classList.add("hidden");
+  } else {
+    markerCategory.value = "";
+    markerCategoryCustom.classList.add("hidden");
+  }
 }
 
 function makeIcon(hasPhoto, done) {
@@ -196,11 +242,27 @@ async function loadBuildings() {
   }
   emptyState.classList.add("hidden");
   reportBtn.classList.remove("hidden");
-  currentBuildingCode = buildingsData[0].code;
-  await loadPlans(currentBuildingCode);
+
+  // Wracamy do ostatnio uzywanego budynku/kondygnacji (jesli nadal istnieje wsrod
+  // wczytanych planow), zeby nie trzeba bylo za kazdym razem wyszukiwac ich od nowa.
+  let building = buildingsData[0];
+  let preferredFile = null;
+  const lastPlanKey = await dbGetMeta("lastPlanKey");
+  if (lastPlanKey) {
+    const sep = lastPlanKey.indexOf("::");
+    const lastBuildingCode = lastPlanKey.slice(0, sep);
+    const lastFile = lastPlanKey.slice(sep + 2);
+    const match = buildingsData.find((b) => b.code === lastBuildingCode);
+    if (match && match.plans.some((p) => p.file === lastFile)) {
+      building = match;
+      preferredFile = lastFile;
+    }
+  }
+  buildingSelect.value = building.code;
+  await loadPlans(building.code, preferredFile);
 }
 
-async function loadPlans(buildingCode) {
+async function loadPlans(buildingCode, preferredFile) {
   currentBuildingCode = buildingCode;
   const building = buildingsData.find((b) => b.code === buildingCode);
   planSelect.innerHTML = "";
@@ -222,8 +284,9 @@ async function loadPlans(buildingCode) {
     exportCsv(buildingCode);
   };
   if (building.plans.length) {
-    const first = building.plans[0];
-    await selectPlan(buildingCode, first.file, first.name);
+    const chosen = (preferredFile && building.plans.find((p) => p.file === preferredFile)) || building.plans[0];
+    planSelect.value = chosen.file;
+    await selectPlan(buildingCode, chosen.file, chosen.name);
   }
   await loadInventory();
 }
@@ -248,6 +311,7 @@ async function selectPlan(buildingCode, file, name) {
   currentPlanFile = file;
   currentPlanName = name;
   currentPlanKey = planKeyOf(buildingCode, file);
+  await dbSetMeta("lastPlanKey", currentPlanKey);
   initMapIfNeeded();
 
   const rec = await dbGetPlanImage(buildingCode, file);
@@ -351,6 +415,7 @@ async function onMapClick(e) {
     x: e.latlng.lng,
     y: e.latlng.lat,
     note: "",
+    category: "",
     photos: [],
     done: false,
     createdAt: now,
@@ -360,10 +425,11 @@ async function onMapClick(e) {
   openMarkerPanel(marker);
 }
 
-function openMarkerPanel(m) {
+async function openMarkerPanel(m) {
   editingMarkerId = m.id;
   markerPanelTitle.textContent = `Punkt #${m.id}`;
   markerDone.checked = !!m.done;
+  await populateCategorySelect(m.category || "");
   markerNote.value = m.note || "";
   markerPhotoCamera.value = "";
   markerPhotoGalleryInput.value = "";
@@ -399,6 +465,39 @@ markerDone.addEventListener("change", async () => {
     await loadInventory();
   }
 });
+
+markerCategory.addEventListener("change", async () => {
+  if (editingMarkerId == null) return;
+  if (markerCategory.value === "__custom__") {
+    markerCategoryCustom.classList.remove("hidden");
+    markerCategoryCustom.value = "";
+    markerCategoryCustom.focus();
+    return;
+  }
+  const id = editingMarkerId;
+  await dbUpdateMarker(id, { category: markerCategory.value, updatedAt: new Date().toISOString() });
+});
+
+async function saveCustomCategory() {
+  if (editingMarkerId == null) return;
+  const id = editingMarkerId;
+  const value = markerCategoryCustom.value.trim();
+  markerCategoryCustom.classList.add("hidden");
+  if (!value) {
+    markerCategory.value = "";
+    return;
+  }
+  await dbUpdateMarker(id, { category: value, updatedAt: new Date().toISOString() });
+  if (editingMarkerId === id) await populateCategorySelect(value);
+}
+
+markerCategoryCustom.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    saveCustomCategory();
+  }
+});
+markerCategoryCustom.addEventListener("blur", saveCustomCategory);
 
 markerNote.addEventListener("input", () => {
   if (editingMarkerId == null) return;
@@ -469,10 +568,35 @@ async function handlePhotoFiles(input) {
 // bezpieczenstwa przegladarek, dotyczy kazdej appki webowej) - jedyna droga to systemowe
 // okno "Udostepnij" z opcja "Zapisz obraz". Otwieramy je od razu po zrobieniu zdjecia,
 // rownolegle z zapisem w appce (ktory nie czeka na decyzje uzytkownika w oknie udostepniania).
+function sanitizeFilenamePart(s) {
+  return String(s).trim().replace(/[\\/:*?"<>|]/g, "").replace(/\s+/g, "_");
+}
+
+function extensionForMime(type) {
+  if (/png/i.test(type)) return "png";
+  if (/webp/i.test(type)) return "webp";
+  return "jpg";
+}
+
+// Nazwa zdjecia zawiera budynek, kondygnacje (nazwe planu) i wspolrzedne punktu na
+// planie - dzieki temu w galerii telefonu widac po samej nazwie pliku, czego zdjecie
+// dotyczy, bez otwierania appki.
+function buildPhotoFilename(type) {
+  const marker = leafletMarkers[editingMarkerId] && leafletMarkers[editingMarkerId].markerData;
+  const building = sanitizeFilenamePart(currentBuildingCode || "budynek");
+  const plan = sanitizeFilenamePart(currentPlanName || "plan");
+  const x = marker ? Math.round(marker.x) : "0";
+  const y = marker ? Math.round(marker.y) : "0";
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  return `IBP_${building}_${plan}_X${x}_Y${y}_${stamp}.${extensionForMime(type)}`;
+}
+
 async function maybeShareToGallery(file) {
-  if (!navigator.canShare || !navigator.canShare({ files: [file] })) return;
+  if (!navigator.canShare) return;
+  const named = new File([file], buildPhotoFilename(file.type), { type: file.type });
+  if (!navigator.canShare({ files: [named] })) return;
   try {
-    await navigator.share({ files: [file] });
+    await navigator.share({ files: [named] });
   } catch (err) {
     // uzytkownik anulowal udostepnianie - nic nie robimy
   }
@@ -523,16 +647,33 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 // --- Inventory tab ---
 inventoryPlanFilter.addEventListener("change", loadInventory);
 inventoryStatusFilter.addEventListener("change", loadInventory);
+inventoryCategoryFilter.addEventListener("change", loadInventory);
+
+async function refreshCategoryFilterOptions() {
+  const cats = await knownCategories();
+  const current = inventoryCategoryFilter.value;
+  inventoryCategoryFilter.innerHTML = '<option value="">Wszystkie</option>';
+  for (const c of cats) {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    inventoryCategoryFilter.appendChild(opt);
+  }
+  if (cats.includes(current)) inventoryCategoryFilter.value = current;
+}
 
 async function loadInventory() {
   if (!currentBuildingCode) return;
+  await refreshCategoryFilterOptions();
   const planKey = inventoryPlanFilter.value;
   const statusFilter = inventoryStatusFilter.value;
+  const categoryFilter = inventoryCategoryFilter.value;
   let markers = planKey
     ? await dbGetMarkersByPlan(planKey)
     : await dbGetMarkersByBuilding(currentBuildingCode);
   if (statusFilter === "open") markers = markers.filter((m) => !m.done);
   if (statusFilter === "done") markers = markers.filter((m) => !!m.done);
+  if (categoryFilter) markers = markers.filter((m) => m.category === categoryFilter);
   markers.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
 
   const tbody = document.querySelector("#inventory-table tbody");
@@ -549,6 +690,7 @@ async function loadInventory() {
       <td>${idx + 1}</td>
       <td>${m.planName}</td>
       <td>${statusCell}</td>
+      <td>${(m.category || "").replace(/</g, "&lt;")}</td>
       <td>${(m.note || "").replace(/</g, "&lt;")}</td>
       <td>${photoCell}</td>
       <td>${(m.createdAt || "").replace("T", " ").slice(0, 19)}</td>
@@ -596,12 +738,14 @@ function downloadBlob(blob, filename) {
 async function exportCsv(buildingCode) {
   const markers = await dbGetMarkersByBuilding(buildingCode);
   markers.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
-  const header = ["Budynek", "Plan", "Status", "Uwagi", "X", "Y", "Utworzono", "Zaktualizowano"];
+  const header = ["Budynek", "Plan", "Status", "Kategoria", "Uwagi", "X", "Y", "Utworzono", "Zaktualizowano"];
   const lines = [header.map(csvEscape).join(";")];
   for (const m of markers) {
     const status = m.done ? "Załatwione" : "Do zrobienia";
     lines.push(
-      [buildingCode, m.planName, status, m.note, m.x, m.y, m.createdAt, m.updatedAt].map(csvEscape).join(";")
+      [buildingCode, m.planName, status, m.category || "", m.note, m.x, m.y, m.createdAt, m.updatedAt]
+        .map(csvEscape)
+        .join(";")
     );
   }
   const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
@@ -658,6 +802,7 @@ exportBackupBtn.addEventListener("click", async () => {
       x: m.x,
       y: m.y,
       note: m.note,
+      category: m.category || "",
       done: !!m.done,
       photos,
       createdAt: m.createdAt,
@@ -689,6 +834,7 @@ importBackupInput.addEventListener("change", async () => {
       x: r.x,
       y: r.y,
       note: r.note || "",
+      category: r.category || "",
       done: !!r.done,
       photos,
       createdAt: r.createdAt || new Date().toISOString(),
@@ -845,7 +991,8 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
     const num = i + 1;
     const photos = m.photos || [];
     const statusMark = m.done ? "[✓]" : "[ ]";
-    const noteLines = doc.splitTextToSize(`${statusMark} ${num}. ${m.note || "(brak notatki)"}`, availW);
+    const categoryPart = m.category ? ` [${m.category}]` : "";
+    const noteLines = doc.splitTextToSize(`${statusMark} ${num}.${categoryPart} ${m.note || "(brak notatki)"}`, availW);
     const photosRowH = photos.length ? THUMB + 4 : 0;
     const blockH = noteLines.length * 4.2 + photosRowH + 4;
     if (y + blockH > pageH - margin) {
