@@ -135,6 +135,10 @@ const importPlansInput = document.getElementById("import-plans-input");
 const buildingsLoadedInfo = document.getElementById("buildings-loaded-info");
 const emptyState = document.getElementById("empty-state");
 
+const snackbar = document.getElementById("snackbar");
+const snackbarText = document.getElementById("snackbar-text");
+const snackbarUndoBtn = document.getElementById("snackbar-undo");
+
 let buildingsData = [];
 let map = null;
 let imageOverlay = null;
@@ -424,6 +428,30 @@ function setSaveStatus(text, saving) {
   saveStatus.classList.toggle("saving", !!saving);
 }
 
+// Pasek "Usunieto [Cofnij]" znany z Androida (np. Gmail, Pliki Google) - usuniecie
+// punktu/zdjecia od razu zapisuje sie w bazie (zgodnie z zasada natychmiastowego
+// zapisu), ale przez chwile mozna to cofnac, zamiast bezpowrotnie tracic dane
+// przez pomylke.
+let snackbarTimer = null;
+function showSnackbar(message, onUndo) {
+  clearTimeout(snackbarTimer);
+  snackbarText.textContent = message;
+  // Jesli panel punktu (mobilny "bottom sheet") jest akurat otwarty, podnies pasek ponad niego
+  if (!markerPanel.classList.contains("hidden")) {
+    const rect = markerPanel.getBoundingClientRect();
+    snackbar.style.bottom = `${Math.max(16, window.innerHeight - rect.top + 10)}px`;
+  } else {
+    snackbar.style.bottom = "16px";
+  }
+  snackbar.classList.remove("hidden");
+  snackbarUndoBtn.onclick = () => {
+    clearTimeout(snackbarTimer);
+    snackbar.classList.add("hidden");
+    onUndo();
+  };
+  snackbarTimer = setTimeout(() => snackbar.classList.add("hidden"), 6000);
+}
+
 function renderPhotoGallery(photos) {
   markerPhotoGallery.innerHTML = "";
   (photos || []).forEach((p, idx) => {
@@ -447,6 +475,13 @@ function renderPhotoGallery(photos) {
         renderPhotoGallery(updated.photos);
         refreshLeafletMarker(updated);
       }
+      showSnackbar("Zdjęcie usunięte", async () => {
+        const restored = await dbAddPhotoToMarker(id, p.blob, p.type);
+        if (restored && editingMarkerId === id) {
+          renderPhotoGallery(restored.photos);
+          refreshLeafletMarker(restored);
+        }
+      });
     });
 
     wrap.appendChild(img);
@@ -701,6 +736,7 @@ markerPhotoGalleryInput.addEventListener("change", () => handlePhotoFiles(marker
 markerDeleteBtn.addEventListener("click", async () => {
   if (editingMarkerId == null) return;
   const id = editingMarkerId;
+  const snapshot = await dbGetMarker(id);
   await dbDeleteMarker(id);
   const old = leafletMarkers[id];
   if (old) map.removeLayer(old);
@@ -708,6 +744,13 @@ markerDeleteBtn.addEventListener("click", async () => {
   editingMarkerId = null; // zapobiega ponownemu "sprzataniu" w closeMarkerPanel
   markerPanel.classList.add("hidden");
   await loadInventory();
+  if (snapshot) {
+    showSnackbar("Punkt usunięty", async () => {
+      const restored = await dbAddMarker(snapshot);
+      if (restored.planKey === currentPlanKey) addLeafletMarker(restored);
+      await loadInventory();
+    });
+  }
 });
 
 markerCloseBtn.addEventListener("click", closeMarkerPanel);

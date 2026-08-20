@@ -334,6 +334,37 @@ button.danger {
 
 .hidden { display: none !important; }
 
+#snackbar {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 2000;
+  background: #1f2328;
+  color: white;
+  padding: 10px 12px 10px 16px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.85rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  max-width: calc(100% - 32px);
+  transition: bottom 0.15s ease;
+}
+
+#snackbar.hidden { display: none; }
+
+#snackbar-undo {
+  background: none;
+  border: none;
+  color: #ffb4c0;
+  font-weight: 600;
+  padding: 4px 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 #tab-inventory {
   padding: 16px;
   overflow: auto;
