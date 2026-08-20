@@ -415,24 +415,74 @@ markerNote.addEventListener("input", () => {
   }, 500);
 });
 
+// Zdjecia z aparatu telefonu potrafia miec po kilka-kilkanascie MB - zapisane
+// wprost do IndexedDB szybko zapychaja pamiec urzadzenia i spowalniaja kazdy
+// kolejny zapis punktu (caly rekord, ze wszystkimi zdjeciami, jest przy kazdej
+// zmianie odczytywany i zapisywany na nowo). Zmniejszamy je przed zapisem.
+function compressImage(file, maxDim = 1600, quality = 0.75) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+      const w = Math.round(img.naturalWidth * scale);
+      const h = Math.round(img.naturalHeight * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      canvas.toBlob((blob) => resolve(blob || file), "image/jpeg", quality);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(file); // np. nietypowy format - zapisz oryginal zamiast blokowac zapis
+    };
+    img.src = url;
+  });
+}
+
 async function handlePhotoFiles(input) {
   const files = Array.from(input.files || []);
   if (!files.length || editingMarkerId == null) return;
   setSaveStatus(files.length > 1 ? "Zapisywanie zdjęć…" : "Zapisywanie zdjęcia…", true);
   const id = editingMarkerId;
   let updated = null;
-  for (const file of files) {
-    updated = await dbAddPhotoToMarker(id, file, file.type);
-  }
-  input.value = "";
-  if (updated && editingMarkerId === id) {
-    renderPhotoGallery(updated.photos);
-    setSaveStatus("Zapisano", false);
-    refreshLeafletMarker(updated);
+  try {
+    for (const file of files) {
+      const compressed = await compressImage(file);
+      updated = await dbAddPhotoToMarker(id, compressed, compressed.type || "image/jpeg");
+    }
+    input.value = "";
+    if (updated && editingMarkerId === id) {
+      renderPhotoGallery(updated.photos);
+      setSaveStatus("Zapisano", false);
+      refreshLeafletMarker(updated);
+    }
+  } catch (err) {
+    setSaveStatus("Błąd zapisu zdjęcia — spróbuj ponownie", false);
+    alert("Nie udało się zapisać zdjęcia (brak miejsca na urządzeniu?): " + err.message);
   }
 }
 
-markerPhotoCamera.addEventListener("change", () => handlePhotoFiles(markerPhotoCamera));
+// Strona/PWA nie moze po cichu zapisac zdjecia wprost do galerii telefonu (ograniczenie
+// bezpieczenstwa przegladarek, dotyczy kazdej appki webowej) - jedyna droga to systemowe
+// okno "Udostepnij" z opcja "Zapisz obraz". Otwieramy je od razu po zrobieniu zdjecia,
+// rownolegle z zapisem w appce (ktory nie czeka na decyzje uzytkownika w oknie udostepniania).
+async function maybeShareToGallery(file) {
+  if (!navigator.canShare || !navigator.canShare({ files: [file] })) return;
+  try {
+    await navigator.share({ files: [file] });
+  } catch (err) {
+    // uzytkownik anulowal udostepnianie - nic nie robimy
+  }
+}
+
+markerPhotoCamera.addEventListener("change", () => {
+  const file = markerPhotoCamera.files && markerPhotoCamera.files[0];
+  if (file) maybeShareToGallery(file);
+  handlePhotoFiles(markerPhotoCamera);
+});
 markerPhotoGalleryInput.addEventListener("change", () => handlePhotoFiles(markerPhotoGalleryInput));
 
 markerDeleteBtn.addEventListener("click", async () => {
