@@ -981,34 +981,45 @@ importBackupInput.addEventListener("change", async () => {
   await loadInventory();
 });
 
-// --- Import planow budynkow (lokalnie, jednorazowo) ---
+// --- Import planow budynkow (lokalnie, jednorazowo, mozna wiele plikow naraz) ---
 importPlansInput.addEventListener("change", async () => {
-  const file = importPlansInput.files[0];
-  if (!file) return;
+  const files = Array.from(importPlansInput.files || []);
+  if (!files.length) return;
   importPlansInput.disabled = true;
+  const results = [];
   try {
-    const text = await file.text();
-    const records = JSON.parse(text);
-    for (const r of records) {
-      const blob = dataUrlToBlob(r.image);
-      await dbPutPlanImage({
-        key: planKeyOf(r.buildingCode, r.file),
-        buildingCode: r.buildingCode,
-        buildingName: r.buildingName || r.buildingCode,
-        file: r.file,
-        name: r.name,
-        sortOrder: r.sortOrder || 0,
-        blob,
-      });
+    for (const file of files) {
+      try {
+        const text = await file.text();
+        const records = JSON.parse(text);
+        for (const r of records) {
+          const blob = dataUrlToBlob(r.image);
+          await dbPutPlanImage({
+            key: planKeyOf(r.buildingCode, r.file),
+            buildingCode: r.buildingCode,
+            buildingName: r.buildingName || r.buildingCode,
+            file: r.file,
+            name: r.name,
+            sortOrder: r.sortOrder || 0,
+            blob,
+          });
+        }
+        results.push({ name: file.name, ok: true, count: records.length });
+      } catch (err) {
+        // blad jednego pliku nie przerywa wczytywania pozostalych
+        results.push({ name: file.name, ok: false, error: err.message });
+      }
     }
-    importPlansInput.value = "";
-    alert(`Wczytano ${records.length} planów.`);
     await loadBuildings();
-  } catch (err) {
-    alert("Nie udało się wczytać pliku planów: " + err.message);
   } finally {
+    importPlansInput.value = "";
     importPlansInput.disabled = false;
   }
+
+  const summary = results
+    .map((r) => (r.ok ? `✓ ${r.name} — wczytano ${r.count} planów` : `✗ ${r.name} — błąd: ${r.error}`))
+    .join("\n");
+  alert(summary);
 });
 
 // --- Raport PDF: mapka z ponumerowanymi punktami + legenda notatek ---
