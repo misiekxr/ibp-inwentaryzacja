@@ -194,14 +194,17 @@ async function populateCategorySelect(selected) {
   }
 }
 
-function makeIcon(hasPhoto, done) {
+function makeIcon(hasPhoto, done, unlocked) {
   const badge = hasPhoto
     ? `<div style="position:absolute;top:-4px;right:-4px;font-size:9px;line-height:1;">📷</div>`
+    : "";
+  const unlockDot = unlocked
+    ? `<div style="position:absolute;bottom:-3px;left:-3px;width:9px;height:9px;border-radius:50%;background:#dc2626;border:1.5px solid white;"></div>`
     : "";
   const color = done ? "#16a34a" : "#782834";
   return L.divIcon({
     className: "",
-    html: `<div style="position:relative;width:16px;height:16px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 3px rgba(0,0,0,0.5);">${badge}</div>`,
+    html: `<div style="position:relative;width:16px;height:16px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 3px rgba(0,0,0,0.5);">${badge}${unlockDot}</div>`,
     iconSize: [16, 16],
     iconAnchor: [8, 8],
   });
@@ -337,13 +340,48 @@ async function selectPlan(buildingCode, file, name) {
 
 function addLeafletMarker(m) {
   const marker = L.marker([m.y, m.x], {
-    icon: makeIcon(!!(m.photos && m.photos.length), !!m.done),
-    draggable: true,
+    icon: makeIcon(!!(m.photos && m.photos.length), !!m.done, false),
+    draggable: false,
   });
   marker.markerData = m;
+  marker.dragUnlocked = false;
+
+  const refreshIcon = () => {
+    const d = marker.markerData;
+    marker.setIcon(makeIcon(!!(d.photos && d.photos.length), !!d.done, marker.dragUnlocked));
+  };
+
+  // Przesuwanie pinezki wymaga przytrzymania 3 sek. (jak "tryb edycji" po
+  // przytrzymaniu ikony na ekranie glownym telefonu) - chroni przed przypadkowym
+  // przesunieciem punktu przy zwyklym tapnieciu, ktore otwiera panel notatki.
+  // Dwuklik ponownie blokuje przesuwanie.
+  let longPressTimer = null;
+  const cancelLongPress = () => {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  };
+  const unlockDrag = () => {
+    marker.dragUnlocked = true;
+    marker.dragging.enable();
+    refreshIcon();
+    if (navigator.vibrate) navigator.vibrate(50);
+  };
+  const lockDrag = () => {
+    cancelLongPress();
+    marker.dragUnlocked = false;
+    marker.dragging.disable();
+    refreshIcon();
+  };
+
   marker.on("click", (e) => {
     L.DomEvent.stopPropagation(e);
-    openMarkerPanel(m);
+    openMarkerPanel(marker.markerData);
+  });
+  marker.on("dblclick", (e) => {
+    L.DomEvent.stopPropagation(e);
+    lockDrag();
   });
   marker.on("dragend", async () => {
     const latlng = marker.getLatLng();
@@ -354,7 +392,24 @@ function addLeafletMarker(m) {
     });
     if (updated) marker.markerData = updated;
   });
+
   marker.addTo(map);
+  const el = marker.getElement();
+  if (el) {
+    el.style.webkitTouchCallout = "none";
+    el.style.userSelect = "none";
+    el.addEventListener("pointerdown", () => {
+      cancelLongPress();
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        unlockDrag();
+      }, 3000);
+    });
+    el.addEventListener("pointerup", cancelLongPress);
+    el.addEventListener("pointercancel", cancelLongPress);
+    el.addEventListener("pointerleave", cancelLongPress);
+    el.addEventListener("contextmenu", (e) => e.preventDefault());
+  }
   leafletMarkers[m.id] = marker;
 }
 
@@ -515,15 +570,44 @@ markerNote.addEventListener("input", () => {
   }, 500);
 });
 
-// Zdjecia z aparatu telefonu potrafia miec po kilka-kilkanascie MB - zapisane
-// wprost do IndexedDB szybko zapychaja pamiec urzadzenia i spowalniaja kazdy
-// kolejny zapis punktu (caly rekord, ze wszystkimi zdjeciami, jest przy kazdej
-// zmianie odczytywany i zapisywany na nowo). Zmniejszamy je przed zapisem.
-function compressImage(file, maxDim = 1600, quality = 0.75) {
+// Zdjecia z aparatu telefonu potrafia miec po kilka-kilkanascie (a przy nowszych
+// aparatach - kilkadziesiat) MB. Wczytanie takiego pliku w pelnej rozdzielczosci
+// przez zwykle <img> + canvas samo w sobie potrafi wyczerpac pamiec na slabszym
+// telefonie, zanim jeszcze dojdzie do kompresji. createImageBitmap z opcja resize
+// pozwala przegladarce dekodowac i pomniejszac obraz "w locie", bez trzymania
+// pelnej rozdzielczosci w pamieci - to najbardziej odporny sposob obrobki.
+async function compressImage(file, maxDim = 1600, quality = 0.75) {
+  if (window.createImageBitmap) {
+    try {
+      const bitmap = await createImageBitmap(file, { resizeWidth: maxDim, resizeQuality: "medium" });
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      canvas.getContext("2d").drawImage(bitmap, 0, 0);
+      bitmap.close();
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+      if (blob) return blob;
+    } catch (err) {
+      // np. format bez wsparcia dekodera (HEIC na starszym Androidzie) - proba zapasowej metody ponizej
+    }
+  }
+
+  // Zapasowa metoda + twardy limit czasu: jesli dekodowanie sie zawiesi (nigdy nie
+  // odpali ani onload, ani onerror), po 8s i tak zapisujemy oryginal zamiast
+  // blokowac zapis punktu w nieskonczonosc - priorytetem jest, zeby zdjecie
+  // zawsze trafilo do appki, nawet nieskompresowane.
   return new Promise((resolve) => {
+    let done = false;
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      resolve(result);
+    };
+    const timeout = setTimeout(() => finish(file), 8000);
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
+      clearTimeout(timeout);
       URL.revokeObjectURL(url);
       const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
       const w = Math.round(img.naturalWidth * scale);
@@ -532,11 +616,12 @@ function compressImage(file, maxDim = 1600, quality = 0.75) {
       canvas.width = w;
       canvas.height = h;
       canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-      canvas.toBlob((blob) => resolve(blob || file), "image/jpeg", quality);
+      canvas.toBlob((blob) => finish(blob || file), "image/jpeg", quality);
     };
     img.onerror = () => {
+      clearTimeout(timeout);
       URL.revokeObjectURL(url);
-      resolve(file); // np. nietypowy format - zapisz oryginal zamiast blokowac zapis
+      finish(file);
     };
     img.src = url;
   });
@@ -593,13 +678,16 @@ function buildPhotoFilename(type) {
 }
 
 async function maybeShareToGallery(file) {
-  if (!navigator.canShare) return;
-  const named = new File([file], buildPhotoFilename(file.type), { type: file.type });
-  if (!navigator.canShare({ files: [named] })) return;
+  // Cala funkcja w jednym try/catch, zeby zaden blad API (np. brak wsparcia
+  // udostepniania plikow na danym telefonie) nie odbil sie echem na zapisie
+  // zdjecia w appce - ten zapis (handlePhotoFiles) dziala calkowicie niezaleznie.
   try {
+    if (!navigator.canShare) return;
+    const named = new File([file], buildPhotoFilename(file.type), { type: file.type });
+    if (!navigator.canShare({ files: [named] })) return;
     await navigator.share({ files: [named] });
   } catch (err) {
-    // uzytkownik anulowal udostepnianie - nic nie robimy
+    // brak wsparcia / uzytkownik anulowal udostepnianie - appka i tak juz zapisala zdjecie u siebie
   }
 }
 
