@@ -942,7 +942,9 @@ exportBackupBtn.addEventListener("click", async () => {
     });
   }
   const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
-  const stamp = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
   downloadBlob(blob, `ibp-kopia-${stamp}.json`);
   await dbSetMeta("lastExportAt", new Date().toISOString());
   await refreshBackupInfo();
