@@ -295,9 +295,20 @@ const markerCloseBtn = document.getElementById("marker-close");
 const exportBackupBtn = document.getElementById("export-backup-btn");
 const importBackupInput = document.getElementById("import-backup-input");
 const lastExportInfo = document.getElementById("last-export-info");
+const backupDirSection = document.getElementById("backup-dir-section");
+const backupDirInfo = document.getElementById("backup-dir-info");
+const connectBackupDirBtn = document.getElementById("connect-backup-dir-btn");
 
 const importPlansInput = document.getElementById("import-plans-input");
 const buildingsLoadedInfo = document.getElementById("buildings-loaded-info");
+
+const planAddCode = document.getElementById("plan-add-code");
+const planAddCodeList = document.getElementById("plan-add-code-list");
+const planAddBuildingName = document.getElementById("plan-add-building-name");
+const planAddName = document.getElementById("plan-add-name");
+const planAddStatus = document.getElementById("plan-add-status");
+const planAddCamera = document.getElementById("plan-add-camera");
+const planAddFile = document.getElementById("plan-add-file");
 const emptyState = document.getElementById("empty-state");
 
 const snackbar = document.getElementById("snackbar");
@@ -502,6 +513,7 @@ async function loadBuildings() {
   buildingsLoadedInfo.textContent = buildingsData.length
     ? `Wczytane budynki: ${buildingsData.map((b) => b.code).join(", ")}`
     : "Wczytane budynki: brak";
+  refreshPlanAddCodeList();
 
   if (!buildingsData.length) {
     emptyState.classList.remove("hidden");
@@ -1323,15 +1335,15 @@ async function refreshBackupInfo() {
   }
 }
 
-exportBackupBtn.addEventListener("click", async () => {
+async function buildBackupPayload() {
   const markers = await dbGetAllMarkers();
-  const out = [];
+  const markerOut = [];
   for (const m of markers) {
     const photos = [];
     for (const p of m.photos || []) {
       photos.push({ image: await blobToDataUrl(p.blob), addedAt: p.addedAt });
     }
-    out.push({
+    markerOut.push({
       buildingCode: m.buildingCode,
       planFile: m.planFile,
       planName: m.planName,
@@ -1345,24 +1357,32 @@ exportBackupBtn.addEventListener("click", async () => {
       updatedAt: m.updatedAt,
     });
   }
-  const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
-  downloadBlob(blob, `ibp-kopia-${stamp}.json`);
-  await dbSetMeta("lastExportAt", new Date().toISOString());
-  await refreshBackupInfo();
-});
+
+  const planImages = await dbGetAllPlanImages();
+  const planOut = [];
+  for (const p of planImages) {
+    planOut.push({
+      buildingCode: p.buildingCode,
+      buildingName: p.buildingName,
+      file: p.file,
+      name: p.name,
+      sortOrder: p.sortOrder || 0,
+      image: await blobToDataUrl(p.blob),
+    });
+  }
+
+  return { version: 2, exportedAt: new Date().toISOString(), markers: markerOut, planImages: planOut };
+}
 
 // Punkt uznajemy za juz istniejacy, jesli w tym samym budynku/planie jest juz
 // wpis z dokladnie tym samym createdAt - to wystarczajaco unikalny "odcisk palca"
 // (znacznik czasu utworzenia, przenoszony przez eksport/import bez zmian), zeby
 // wykryc powtorny import tej samej kopii zapasowej bez ryzyka falszywych trafien.
-importBackupInput.addEventListener("change", async () => {
-  const file = importBackupInput.files[0];
-  if (!file) return;
-  const text = await file.text();
-  const records = JSON.parse(text);
+// Akceptuje stary format (goła tablica markerow) i nowy ({markers, planImages}).
+async function importBackupPayload(parsed) {
+  const records = Array.isArray(parsed) ? parsed : parsed.markers || [];
+  const planRecords = Array.isArray(parsed) ? [] : parsed.planImages || [];
+
   const existing = await dbGetAllMarkers();
   const existingKeys = new Set(existing.map((m) => `${m.buildingCode}::${m.planFile}::${m.createdAt}`));
   let imported = 0;
@@ -1394,8 +1414,161 @@ importBackupInput.addEventListener("change", async () => {
     existingKeys.add(key);
     imported++;
   }
+
+  let plansImported = 0;
+  for (const r of planRecords) {
+    const blob = dataUrlToBlob(r.image);
+    await dbPutPlanImage({
+      key: planKeyOf(r.buildingCode, r.file),
+      buildingCode: r.buildingCode,
+      buildingName: r.buildingName || r.buildingCode,
+      file: r.file,
+      name: r.name,
+      sortOrder: r.sortOrder || 0,
+      blob,
+    });
+    plansImported++;
+  }
+
+  return { imported, skipped, plansImported };
+}
+
+// --- Zapis/odczyt kopii bezposrednio z folderu na dysku (File System Access API,
+// dostepne tylko na komputerze - Chrome/Edge). Uchwyt folderu trzymany jest trwale
+// w IndexedDB (store "meta"), zeby po pierwszym polaczeniu appka juz nigdy wiecej
+// nie musiala pytac o folder.
+const FSA_SUPPORTED = "showDirectoryPicker" in window;
+
+async function getBackupDirHandle() {
+  if (!FSA_SUPPORTED) return null;
+  return await dbGetMeta("backupDirHandle");
+}
+
+async function hasDirPermission(handle, mode) {
+  return (await handle.queryPermission({ mode })) === "granted";
+}
+
+async function refreshBackupDirUI() {
+  if (!FSA_SUPPORTED) {
+    backupDirSection.classList.add("hidden");
+    return;
+  }
+  backupDirSection.classList.remove("hidden");
+  const handle = await getBackupDirHandle();
+  if (!handle) {
+    backupDirInfo.textContent = "Folder na dysku: niepołączony";
+    return;
+  }
+  const granted = await hasDirPermission(handle, "readwrite");
+  backupDirInfo.textContent = granted
+    ? `Folder na dysku: „${handle.name}” ✓ (auto-zapis i auto-odczyt włączone)`
+    : `Folder na dysku: „${handle.name}” — kliknij przycisk, by odnowić zezwolenie`;
+}
+
+connectBackupDirBtn.addEventListener("click", async () => {
+  try {
+    const handle = await window.showDirectoryPicker({ id: "ibp-backup-dir", mode: "readwrite" });
+    if ((await handle.requestPermission({ mode: "readwrite" })) !== "granted") {
+      alert("Brak zgody na zapis do wybranego folderu.");
+      return;
+    }
+    await dbSetMeta("backupDirHandle", handle);
+    await refreshBackupDirUI();
+    await maybeAutoRestore();
+  } catch (err) {
+    if (err.name !== "AbortError") alert("Nie udało się połączyć folderu: " + err.message);
+  }
+});
+
+async function saveBackupCopyToDir(filename, blob) {
+  const handle = await getBackupDirHandle();
+  if (!handle) return false;
+  try {
+    if (!(await hasDirPermission(handle, "readwrite"))) return false;
+    const fileHandle = await handle.getFileHandle(filename, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return true;
+  } catch (err) {
+    console.warn("Zapis kopii na dysku nie powiódł się:", err);
+    return false;
+  }
+}
+
+// Przy starcie appki, jesli lokalnie nie ma jeszcze zadnych punktow (swiezy telefon/
+// przegladarka) i folder kopii jest juz polaczony z przyznanym dostepem (bez pytania
+// uzytkownika o zgode - to wymagaloby gestu), wczytujemy najnowsza kopie z folderu.
+async function maybeAutoRestore() {
+  if (!FSA_SUPPORTED) return;
+  const handle = await getBackupDirHandle();
+  if (!handle) return;
+  const markers = await dbGetAllMarkers();
+  if (markers.length) return;
+  if (!(await hasDirPermission(handle, "readwrite"))) return;
+
+  let latestEntry = null;
+  try {
+    for await (const entry of handle.values()) {
+      if (entry.kind === "file" && /^ibp-kopia-.*\.json$/i.test(entry.name)) {
+        if (!latestEntry || entry.name > latestEntry.name) latestEntry = entry;
+      }
+    }
+  } catch (err) {
+    console.warn("Nie udało się przejrzeć folderu kopii zapasowych:", err);
+    return;
+  }
+  if (!latestEntry) return;
+
+  try {
+    const file = await latestEntry.getFile();
+    const parsed = JSON.parse(await file.text());
+    const { imported, plansImported } = await importBackupPayload(parsed);
+    if (plansImported) await loadBuildings();
+    await loadInventory();
+    backupDirInfo.textContent =
+      `Folder na dysku: „${handle.name}” ✓ — automatycznie przywrócono ${latestEntry.name} ` +
+      `(${imported} punktów, ${plansImported} planów)`;
+  } catch (err) {
+    console.warn("Automatyczne przywracanie kopii nie powiodło się:", err);
+  }
+}
+
+exportBackupBtn.addEventListener("click", async () => {
+  exportBackupBtn.disabled = true;
+  try {
+    const out = await buildBackupPayload();
+    const blob = new Blob([JSON.stringify(out)], { type: "application/json" });
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
+    const filename = `ibp-kopia-${stamp}.json`;
+    downloadBlob(blob, filename);
+    const savedToDir = await saveBackupCopyToDir(filename, blob);
+    await dbSetMeta("lastExportAt", new Date().toISOString());
+    await refreshBackupInfo();
+    if (savedToDir) {
+      const handle = await getBackupDirHandle();
+      backupDirInfo.textContent = `Folder na dysku: „${handle.name}” ✓ — zapisano ${filename}`;
+    }
+  } finally {
+    exportBackupBtn.disabled = false;
+  }
+});
+
+importBackupInput.addEventListener("change", async () => {
+  const file = importBackupInput.files[0];
+  if (!file) return;
+  const text = await file.text();
+  const parsed = JSON.parse(text);
+  const { imported, skipped, plansImported } = await importBackupPayload(parsed);
   importBackupInput.value = "";
-  alert(`Zaimportowano ${imported} punktów.` + (skipped ? ` Pominięto ${skipped} jako duplikaty (już istniały).` : ""));
+  if (plansImported) await loadBuildings();
+  alert(
+    `Zaimportowano ${imported} punktów.` +
+      (skipped ? ` Pominięto ${skipped} jako duplikaty (już istniały).` : "") +
+      (plansImported ? ` Wczytano ${plansImported} planów budynków.` : "")
+  );
   if (currentPlanKey) await selectPlan(currentBuildingCode, currentPlanFile, currentPlanName);
   await loadInventory();
 });
@@ -1439,6 +1612,135 @@ importPlansInput.addEventListener("change", async () => {
     .map((r) => (r.ok ? `✓ ${r.name} — wczytano ${r.count} planów` : `✗ ${r.name} — błąd: ${r.error}`))
     .join("\n");
   alert(summary);
+});
+
+// --- Dodawanie planu wprost ze zdjecia/PDF, bez posredniego pliku JSON -
+// przydatne w terenie, gdy nie ma czasu/laptopa na scripts/build-plan-bundle.ps1.
+// Zapisuje bezposrednio do IndexedDB tego urzadzenia (tak jak import-plans-input),
+// bez tworzenia pliku plany-<KOD>.json - ten plik sluzy tylko do przenoszenia
+// planow MIEDZY urzadzeniami (patrz sekcja "Kopia zapasowa" wyzej).
+function refreshPlanAddCodeList() {
+  planAddCodeList.innerHTML = "";
+  for (const b of buildingsData) {
+    const opt = document.createElement("option");
+    opt.value = b.code;
+    planAddCodeList.appendChild(opt);
+  }
+}
+
+planAddCode.addEventListener("input", () => {
+  const code = planAddCode.value.trim().toUpperCase();
+  const existing = buildingsData.find((b) => b.code === code);
+  if (existing) {
+    planAddBuildingName.value = existing.name;
+    planAddBuildingName.disabled = true;
+  } else {
+    planAddBuildingName.disabled = false;
+  }
+});
+
+function slugifyPlanFile(name) {
+  const cleaned = name.trim().replace(/[\\/:*?"<>|]/g, "").replace(/\s+/g, " ");
+  return (cleaned || "plan") + ".png";
+}
+
+// pdf.min.mjs jest wczytywany przez <script type="module"> w index.html, ktory
+// wykonuje sie po wszystkich zwyklych <script> (w tym po tym pliku) - w praktyce
+// window.pdfjsLib jest gotowe dlugo przed pierwszym kliknieciem uzytkownika, ale
+// na wszelki wypadek czekamy chwile zamiast zakladac, ze juz jest.
+async function getPdfjs() {
+  if (window.pdfjsLib) return window.pdfjsLib;
+  for (let i = 0; i < 50; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (window.pdfjsLib) return window.pdfjsLib;
+  }
+  throw new Error("Biblioteka do PDF jeszcze się nie wczytała — spróbuj ponownie za chwilę.");
+}
+
+// Renderuje 1. strone PDF-a do PNG (~200dpi, z limitem wymiaru dla bezpieczenstwa
+// pamieci na telefonie - tak samo jak limit uzywany przy generowaniu raportu PDF).
+async function renderPdfPageToPngBlob(file) {
+  const pdfjsLib = await getPdfjs();
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const page = await pdf.getPage(1);
+
+  const MAX_DIM = 4000;
+  const base = page.getViewport({ scale: 1 });
+  const scale = Math.min(200 / 72, MAX_DIM / Math.max(base.width, base.height));
+  const viewport = page.getViewport({ scale });
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(viewport.width);
+  canvas.height = Math.round(viewport.height);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "white";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  return { blob, numPages: pdf.numPages };
+}
+
+async function handleNewPlanFile(file) {
+  const code = planAddCode.value.trim().toUpperCase();
+  const planName = planAddName.value.trim();
+  if (!code || !planName) {
+    alert("Podaj kod budynku i nazwę planu (np. „Piętro 1”), zanim dodasz zdjęcie/PDF.");
+    return;
+  }
+
+  const existing = buildingsData.find((b) => b.code === code);
+  const buildingName = existing ? existing.name : planAddBuildingName.value.trim() || code;
+  const fileName = slugifyPlanFile(planName);
+  const existingPlan = existing ? existing.plans.find((p) => p.file === fileName) : null;
+  const sortOrder = existingPlan
+    ? existingPlan.sortOrder
+    : existing && existing.plans.length
+    ? Math.max(...existing.plans.map((p) => p.sortOrder)) + 1
+    : 0;
+
+  planAddStatus.textContent = "Przetwarzanie…";
+  try {
+    let blob;
+    if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
+      const result = await renderPdfPageToPngBlob(file);
+      blob = result.blob;
+      planAddStatus.textContent =
+        result.numPages > 1 ? `Uwaga: PDF ma ${result.numPages} stron, użyto tylko strony 1. ` : "";
+    } else {
+      blob = file;
+    }
+
+    await dbPutPlanImage({
+      key: planKeyOf(code, fileName),
+      buildingCode: code,
+      buildingName,
+      file: fileName,
+      name: planName,
+      sortOrder,
+      blob,
+    });
+
+    await loadBuildings();
+    planAddStatus.textContent += `Dodano „${planName}” do budynku ${code}.`;
+    planAddName.value = "";
+  } catch (err) {
+    console.error(err);
+    planAddStatus.textContent = "Błąd: " + err.message;
+  }
+}
+
+planAddCamera.addEventListener("change", async () => {
+  const file = planAddCamera.files[0];
+  planAddCamera.value = "";
+  if (file) await handleNewPlanFile(file);
+});
+
+planAddFile.addEventListener("change", async () => {
+  const file = planAddFile.files[0];
+  planAddFile.value = "";
+  if (file) await handleNewPlanFile(file);
 });
 
 // --- Raport PDF: mapka z ponumerowanymi punktami + legenda notatek ---
@@ -1747,4 +2049,6 @@ if ("serviceWorker" in navigator) {
   renderSymbolPalette();
   await loadBuildings();
   await refreshBackupInfo();
+  await refreshBackupDirUI();
+  await maybeAutoRestore();
 })();

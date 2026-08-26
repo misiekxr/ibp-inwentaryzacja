@@ -676,6 +676,24 @@ td.row-actions a {
 .backup-panel p { font-size: 0.85rem; color: var(--muted); }
 .backup-panel hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 
+.backup-panel input[type="text"] {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  padding: 6px 8px;
+  font-size: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.backup-panel input[type="text"]:disabled {
+  background: var(--panel);
+  color: var(--muted);
+}
+
+#plan-add-status:empty { display: none; }
+
 #last-export-info {
   font-weight: 600;
   color: var(--text) !important;

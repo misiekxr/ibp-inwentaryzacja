@@ -145,14 +145,54 @@
     </div>
 
     <div class="backup-panel">
+      <h2>Dodaj plan ze zdjęcia lub PDF</h2>
+      <p>
+        Szybka ścieżka w terenie — bez laptopa. Zrób zdjęcie planu (albo wskaż PDF, jeśli go
+        dostałeś), appka sama zamieni go na plan tego budynku, tu na miejscu.
+      </p>
+      <label>Kod budynku (np. C2 — albo nowy kod)
+        <input type="text" id="plan-add-code" list="plan-add-code-list" placeholder="np. C2" autocapitalize="characters">
+        <datalist id="plan-add-code-list"></datalist>
+      </label>
+      <label>Nazwa budynku (tylko przy zakładaniu nowego budynku)
+        <input type="text" id="plan-add-building-name" placeholder="np. C2">
+      </label>
+      <label>Nazwa planu (np. Piętro 1, Parter, PZT)
+        <input type="text" id="plan-add-name" placeholder="np. Piętro 1">
+      </label>
+      <p id="plan-add-status"></p>
+      <div class="photo-add-row">
+        <label class="photo-add-btn">Zrób zdjęcie
+          <input type="file" id="plan-add-camera" accept="image/*" capture="environment" class="hidden">
+        </label>
+        <label class="photo-add-btn secondary">Wybierz plik (zdjęcie/PDF)
+          <input type="file" id="plan-add-file" accept="image/*,application/pdf" class="hidden">
+        </label>
+      </div>
+    </div>
+
+    <div class="backup-panel">
       <h2>Kopia zapasowa danych</h2>
       <p>
-        Wszystkie dane (punkty, notatki, zdjęcia) są zapisane tylko na tym telefonie.
-        Regularnie rób kopię zapasową i zapisz ją gdzieś poza telefonem (e-mail, dysk w chmurze),
-        żeby nic nie przepadło w razie zgubienia lub reset telefonu.
+        Wszystkie dane (punkty, notatki, zdjęcia, wczytane plany budynków) są zapisane tylko na
+        tym urządzeniu. Regularnie rób kopię zapasową i zapisz ją gdzieś poza urządzeniem
+        (e-mail, dysk w chmurze), żeby nic nie przepadło w razie zgubienia lub resetu telefonu.
+        Kopia zawiera teraz też rzuty budynków, więc plik może być duży.
       </p>
       <p id="last-export-info">Ostatni eksport kopii: nigdy</p>
       <button id="export-backup-btn">Pobierz kopię zapasową (JSON)</button>
+
+      <div id="backup-dir-section" class="hidden">
+        <p>
+          Na tym komputerze możesz połączyć folder na dysku — od tego momentu każda kopia
+          zapasowa zapisze się tam automatycznie, a przy pustej aplikacji ostatnia kopia z tego
+          folderu wczyta się sama. Przy pierwszym połączeniu wskaż folder
+          <code>Z:\Mój dysk\APPmapa\Kopie zapasowe</code>.
+        </p>
+        <p id="backup-dir-info">Folder na dysku: niepołączony</p>
+        <button id="connect-backup-dir-btn" type="button">Połącz folder kopii zapasowych na dysku</button>
+      </div>
+
       <hr>
       <h3>Przywróć z kopii</h3>
       <p>Wczytaj wcześniej pobrany plik kopii zapasowej — dane zostaną dodane do obecnych.</p>
@@ -177,6 +217,11 @@
 <script src="vendor/idb.js"></script>
 <script src="vendor/jspdf.umd.min.js"></script>
 <script src="vendor/ptserif-font.js"></script>
+<script type="module">
+  import * as pdfjsLib from "./vendor/pdf.min.mjs";
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdf.worker.min.mjs";
+  window.pdfjsLib = pdfjsLib;
+</script>
 <script src="app.js"></script>
 </body>
 </html>
