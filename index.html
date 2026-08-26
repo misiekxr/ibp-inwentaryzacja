@@ -148,19 +148,9 @@
       <h2>Dodaj plan ze zdjęcia lub PDF</h2>
       <p>
         Szybka ścieżka w terenie — bez laptopa. Zrób zdjęcie planu (albo wskaż PDF, jeśli go
-        dostałeś), appka sama zamieni go na plan tego budynku, tu na miejscu.
+        dostałeś) — appka sama przeczyta plik i podpowie budynek i nazwę planu, Ty tylko
+        potwierdzasz (albo poprawiasz) i klikasz „Dodaj plan”.
       </p>
-      <label>Kod budynku (np. C2 — albo nowy kod)
-        <input type="text" id="plan-add-code" list="plan-add-code-list" placeholder="np. C2" autocapitalize="characters">
-        <datalist id="plan-add-code-list"></datalist>
-      </label>
-      <label>Nazwa budynku (tylko przy zakładaniu nowego budynku)
-        <input type="text" id="plan-add-building-name" placeholder="np. C2">
-      </label>
-      <label>Nazwa planu (np. Piętro 1, Parter, PZT)
-        <input type="text" id="plan-add-name" placeholder="np. Piętro 1">
-      </label>
-      <p id="plan-add-status"></p>
       <div class="photo-add-row">
         <label class="photo-add-btn">Zrób zdjęcie
           <input type="file" id="plan-add-camera" accept="image/*" capture="environment" class="hidden">
@@ -169,6 +159,18 @@
           <input type="file" id="plan-add-file" accept="image/*,application/pdf" class="hidden">
         </label>
       </div>
+      <p id="plan-add-status"></p>
+      <label>Kod budynku (podpowiedziany z pliku — popraw, jeśli źle zgadła)
+        <input type="text" id="plan-add-code" list="plan-add-code-list" placeholder="np. C2" autocapitalize="characters">
+        <datalist id="plan-add-code-list"></datalist>
+      </label>
+      <label>Nazwa budynku (tylko przy zakładaniu nowego budynku)
+        <input type="text" id="plan-add-building-name" placeholder="np. C2">
+      </label>
+      <label>Nazwa planu (podpowiedziana z pliku — popraw, jeśli źle zgadła)
+        <input type="text" id="plan-add-name" placeholder="np. Piętro 1">
+      </label>
+      <button id="plan-add-submit-btn" type="button" disabled>Dodaj plan</button>
     </div>
 
     <div class="backup-panel">

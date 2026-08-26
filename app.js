@@ -309,6 +309,7 @@ const planAddName = document.getElementById("plan-add-name");
 const planAddStatus = document.getElementById("plan-add-status");
 const planAddCamera = document.getElementById("plan-add-camera");
 const planAddFile = document.getElementById("plan-add-file");
+const planAddSubmitBtn = document.getElementById("plan-add-submit-btn");
 const emptyState = document.getElementById("empty-state");
 
 const snackbar = document.getElementById("snackbar");
@@ -1619,6 +1620,12 @@ importPlansInput.addEventListener("change", async () => {
 // Zapisuje bezposrednio do IndexedDB tego urzadzenia (tak jak import-plans-input),
 // bez tworzenia pliku plany-<KOD>.json - ten plik sluzy tylko do przenoszenia
 // planow MIEDZY urzadzeniami (patrz sekcja "Kopia zapasowa" wyzej).
+//
+// Przeplyw: wybor pliku -> appka od razu go "czyta" (nazwa pliku + tekst z PDF-a,
+// jesli jest) i PODPOWIADA budynek/nazwe planu w polach - Robert tylko potwierdza
+// albo poprawia i klika "Dodaj plan". Nic nie zapisuje sie same, dopoki nie klikniesz.
+let pendingPlanBlob = null;
+
 function refreshPlanAddCodeList() {
   planAddCodeList.innerHTML = "";
   for (const b of buildingsData) {
@@ -1644,6 +1651,55 @@ function slugifyPlanFile(name) {
   return (cleaned || "plan") + ".png";
 }
 
+// \b traktuje "_" jako znak slowa, wiec nie widzi granicy w "C2_piwnica" - wlasna
+// klasa znakow (bez "_") jako "nie-litera/cyfra" lapie tez separatory w plikach typu
+// "C2_piętro1.png".
+function looseWordBoundaryRegex(word) {
+  return new RegExp("(?:^|[^a-ząćęłńóśźż0-9])" + word + "(?:[^a-ząćęłńóśźż0-9]|$)");
+}
+
+// Zgaduje kod budynku na podstawie tekstu (nazwa pliku + ewentualny tekst z PDF-a) -
+// najpierw szuka samego kodu (np. "C2"), potem slow z nazwy budynku (np. "GIH" dla
+// budynku o nazwie "C5 (GIH)"), zeby zlapac tez potoczne oznaczenia z dokumentow.
+function guessBuildingCodeFromText(text) {
+  const lower = text.toLowerCase();
+  for (const b of buildingsData) {
+    if (looseWordBoundaryRegex(b.code.toLowerCase()).test(lower)) return b.code;
+  }
+  for (const b of buildingsData) {
+    const words = (b.name.toLowerCase().match(/[a-ząćęłńóśźż0-9]+/g) || []).filter(
+      (w) => w.length >= 3 && w !== b.code.toLowerCase()
+    );
+    for (const w of words) {
+      if (looseWordBoundaryRegex(w).test(lower)) return b.code;
+    }
+  }
+  return "";
+}
+
+// Zgaduje nazwe planu (kondygnacje) po typowych slowach kluczowych PL, jakie widac
+// w realnych plikach IBP: PZT/plan sytuacyjny, piwnica, przyziemie, parter, oraz
+// pietro w roznych zapisach - "pietro 2", "2 pietro", "pietro II" (cyfry rzymskie,
+// jak w zdjeciach z telefonu), z separatorem spacja/podkreslnik/myslnik albo bez.
+function guessPlanNameFromText(text) {
+  const lower = text.toLowerCase();
+  if (/\bpzt\b/.test(lower) || /plan[\s_-]*sytuacyjny/.test(lower) || /zagospodarowania[\s_-]*terenu/.test(lower)) {
+    return "Plan zagospodarowania terenu (PZT)";
+  }
+  const floorAfter = lower.match(/pi[ęe]tr[oa]?[\s_-]*(-?\d+)/);
+  if (floorAfter) return `Piętro ${floorAfter[1]}`;
+  const floorBefore = lower.match(/(?:^|[^a-ząćęłńóśźż0-9])(-?\d+)[\s_-]+pi[ęe]tr[oa]?\b/);
+  if (floorBefore) return `Piętro ${floorBefore[1]}`;
+  const romanToNumber = { i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6 };
+  const floorRoman = lower.match(/pi[ęe]tr[oa]?[\s_-]*\b(i{1,3}|iv|v|vi)\b/);
+  if (floorRoman && romanToNumber[floorRoman[1]]) return `Piętro ${romanToNumber[floorRoman[1]]}`;
+  if (/przyziemi/.test(lower)) return "Przyziemie";
+  if (/piwnic/.test(lower)) return "Piwnica";
+  if (/parter/.test(lower)) return "Parter";
+  if (/poddasz/.test(lower)) return "Poddasze";
+  return "";
+}
+
 // pdf.min.mjs jest wczytywany przez <script type="module"> w index.html, ktory
 // wykonuje sie po wszystkich zwyklych <script> (w tym po tym pliku) - w praktyce
 // window.pdfjsLib jest gotowe dlugo przed pierwszym kliknieciem uzytkownika, ale
@@ -1657,14 +1713,9 @@ async function getPdfjs() {
   throw new Error("Biblioteka do PDF jeszcze się nie wczytała — spróbuj ponownie za chwilę.");
 }
 
-// Renderuje 1. strone PDF-a do PNG (~200dpi, z limitem wymiaru dla bezpieczenstwa
-// pamieci na telefonie - tak samo jak limit uzywany przy generowaniu raportu PDF).
-async function renderPdfPageToPngBlob(file) {
-  const pdfjsLib = await getPdfjs();
-  const buf = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-  const page = await pdf.getPage(1);
-
+// Renderuje 1. strone (juz otwartego) PDF-a do PNG (~200dpi, z limitem wymiaru dla
+// bezpieczenstwa pamieci na telefonie - tak samo jak limit przy generowaniu raportu).
+async function renderPdfPageToPngBlob(page) {
   const MAX_DIM = 4000;
   const base = page.getViewport({ scale: 1 });
   const scale = Math.min(200 / 72, MAX_DIM / Math.max(base.width, base.height));
@@ -1678,15 +1729,66 @@ async function renderPdfPageToPngBlob(file) {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   await page.render({ canvasContext: ctx, viewport }).promise;
 
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-  return { blob, numPages: pdf.numPages };
+  return await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
 }
 
-async function handleNewPlanFile(file) {
+// Otwiera plik (obraz albo PDF), przygotowuje PNG do zapisu i podpowiada budynek/nazwe
+// planu - ale jeszcze NIC nie zapisuje do bazy. Zapis dopiero po kliknieciu przycisku.
+async function prepareNewPlanFile(file) {
+  pendingPlanBlob = null;
+  planAddSubmitBtn.disabled = true;
+  planAddStatus.textContent = "Wczytywanie…";
+
+  try {
+    let textSample = file.name;
+    let statusPrefix = "";
+    const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+
+    if (isPdf) {
+      const pdfjsLib = await getPdfjs();
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      const page = await pdf.getPage(1);
+      try {
+        const content = await page.getTextContent();
+        textSample += " " + content.items.map((it) => it.str).join(" ");
+      } catch (err) {
+        console.warn("Nie udało się odczytać tekstu z PDF-a (do podpowiedzi):", err);
+      }
+      pendingPlanBlob = await renderPdfPageToPngBlob(page);
+      if (pdf.numPages > 1) {
+        statusPrefix = `Uwaga: PDF ma ${pdf.numPages} stron, użyto tylko strony 1. `;
+      }
+    } else {
+      pendingPlanBlob = file;
+    }
+
+    if (!planAddCode.value.trim()) {
+      const guessedCode = guessBuildingCodeFromText(textSample) || currentBuildingCode || "";
+      if (guessedCode) {
+        planAddCode.value = guessedCode;
+        planAddCode.dispatchEvent(new Event("input"));
+      }
+    }
+    const guessedName = guessPlanNameFromText(textSample);
+    if (guessedName) planAddName.value = guessedName;
+
+    planAddStatus.textContent =
+      statusPrefix + `Gotowe: „${file.name}” — sprawdź budynek i nazwę planu, potem kliknij „Dodaj plan”.`;
+    planAddSubmitBtn.disabled = false;
+  } catch (err) {
+    console.error(err);
+    planAddStatus.textContent = "Błąd: " + err.message;
+    pendingPlanBlob = null;
+  }
+}
+
+planAddSubmitBtn.addEventListener("click", async () => {
+  if (!pendingPlanBlob) return;
   const code = planAddCode.value.trim().toUpperCase();
   const planName = planAddName.value.trim();
   if (!code || !planName) {
-    alert("Podaj kod budynku i nazwę planu (np. „Piętro 1”), zanim dodasz zdjęcie/PDF.");
+    alert("Podaj kod budynku i nazwę planu (np. „Piętro 1”), zanim dodasz.");
     return;
   }
 
@@ -1700,18 +1802,8 @@ async function handleNewPlanFile(file) {
     ? Math.max(...existing.plans.map((p) => p.sortOrder)) + 1
     : 0;
 
-  planAddStatus.textContent = "Przetwarzanie…";
+  planAddSubmitBtn.disabled = true;
   try {
-    let blob;
-    if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
-      const result = await renderPdfPageToPngBlob(file);
-      blob = result.blob;
-      planAddStatus.textContent =
-        result.numPages > 1 ? `Uwaga: PDF ma ${result.numPages} stron, użyto tylko strony 1. ` : "";
-    } else {
-      blob = file;
-    }
-
     await dbPutPlanImage({
       key: planKeyOf(code, fileName),
       buildingCode: code,
@@ -1719,28 +1811,30 @@ async function handleNewPlanFile(file) {
       file: fileName,
       name: planName,
       sortOrder,
-      blob,
+      blob: pendingPlanBlob,
     });
 
     await loadBuildings();
-    planAddStatus.textContent += `Dodano „${planName}” do budynku ${code}.`;
+    planAddStatus.textContent = `Dodano „${planName}” do budynku ${code}.`;
     planAddName.value = "";
+    pendingPlanBlob = null;
   } catch (err) {
     console.error(err);
     planAddStatus.textContent = "Błąd: " + err.message;
+    planAddSubmitBtn.disabled = false;
   }
-}
+});
 
 planAddCamera.addEventListener("change", async () => {
   const file = planAddCamera.files[0];
   planAddCamera.value = "";
-  if (file) await handleNewPlanFile(file);
+  if (file) await prepareNewPlanFile(file);
 });
 
 planAddFile.addEventListener("change", async () => {
   const file = planAddFile.files[0];
   planAddFile.value = "";
-  if (file) await handleNewPlanFile(file);
+  if (file) await prepareNewPlanFile(file);
 });
 
 // --- Raport PDF: mapka z ponumerowanymi punktami + legenda notatek ---
