@@ -1,6 +1,6 @@
 const { openDB } = idb;
 
-const dbPromise = openDB("ibp-db", 2, {
+const dbPromise = openDB("ibp-db", 3, {
   upgrade(db, oldVersion) {
     if (oldVersion < 1) {
       const markers = db.createObjectStore("markers", { keyPath: "id", autoIncrement: true });
@@ -12,6 +12,10 @@ const dbPromise = openDB("ibp-db", 2, {
     }
     if (oldVersion < 2) {
       db.createObjectStore("symbolTypes", { keyPath: "id", autoIncrement: true });
+    }
+    if (oldVersion < 3) {
+      const measurements = db.createObjectStore("measurements", { keyPath: "id", autoIncrement: true });
+      measurements.createIndex("by-building", "buildingCode");
     }
   },
 });
@@ -124,6 +128,66 @@ async function dbDeleteSymbolType(id) {
   await db.delete("symbolTypes", id);
 }
 
+async function dbAddMeasurement(measurement) {
+  const db = await dbPromise;
+  const id = await db.add("measurements", measurement);
+  return { ...measurement, id };
+}
+
+async function dbUpdateMeasurement(id, changes) {
+  const db = await dbPromise;
+  const tx = db.transaction("measurements", "readwrite");
+  const existing = await tx.store.get(id);
+  if (!existing) return null;
+  const updated = { ...existing, ...changes };
+  await tx.store.put(updated);
+  await tx.done;
+  return updated;
+}
+
+async function dbDeleteMeasurement(id) {
+  const db = await dbPromise;
+  await db.delete("measurements", id);
+}
+
+async function dbGetAllMeasurements() {
+  const db = await dbPromise;
+  return db.getAll("measurements");
+}
+
+async function dbGetMeasurementsByBuilding(buildingCode) {
+  const db = await dbPromise;
+  return db.getAllFromIndex("measurements", "by-building", buildingCode);
+}
+
+async function dbGetPlanImageByKey(key) {
+  const db = await dbPromise;
+  return db.get("planImages", key);
+}
+
+// Jak dbPutPlanImage, ale nigdy nie kasuje juz ustawionej skali kalibracji
+// (scaleMPerPx) danego planu, jesli wywolujacy jej wprost nie poda - inaczej
+// podmiana/re-import tego samego pliku planu (np. nowa wersja rzutu) zgubilaby
+// wczesniej wykonana kalibracje bez ostrzezenia.
+async function dbPutPlanImagePreserveScale(record) {
+  if (record.scaleMPerPx === undefined) {
+    const existing = await dbGetPlanImageByKey(record.key);
+    if (existing && existing.scaleMPerPx) record.scaleMPerPx = existing.scaleMPerPx;
+  }
+  await dbPutPlanImage(record);
+}
+
+async function dbSetPlanScale(key, scaleMPerPx) {
+  const db = await dbPromise;
+  const tx = db.transaction("planImages", "readwrite");
+  const existing = await tx.store.get(key);
+  if (!existing) return null;
+  const updated = { ...existing, scaleMPerPx };
+  await tx.store.put(updated);
+  await tx.done;
+  return updated;
+}
+
 // 5 wbudowanych symboli PPOZ jako proste SVG (rysowane raz, przy pierwszym starcie appki
 // na danym urzadzeniu - potem zyja jako zwykle rekordy w symbolTypes, tak jak wlasne typy
 // uzytkownika). Drzwi = standardowy architektoniczny symbol (skrzydlo + luk otwarcia).
@@ -178,6 +242,12 @@ async function loadSymbolTypes() {
 }
 
 function setPlacementMode(id, label) {
+  // Zmiana trybu w trakcie niezapisanego pomiaru odrzucilaby jego punkty od
+  // ostatniego zapisu - ostrzegamy zamiast cicho gubic prace w terenie.
+  if (activeMeasurement && placementMode === "measure" && id !== "measure") {
+    if (!confirm("Masz niezapisany pomiar w toku. Zmiana trybu odrzuci punkty dodane od ostatniego zapisu. Kontynuować?")) return;
+    closeMeasurePanel();
+  }
   placementMode = id;
   paletteCurrentLabel.textContent = label;
   symbolPaletteList.classList.add("hidden");
@@ -196,6 +266,14 @@ function renderSymbolPalette() {
   pointBtn.innerHTML = '<span class="palette-dot"></span><span>Punkt (notatka)</span>';
   pointBtn.addEventListener("click", () => setPlacementMode(null, "Punkt"));
   symbolPaletteList.appendChild(pointBtn);
+
+  const measureBtn = document.createElement("button");
+  measureBtn.type = "button";
+  measureBtn.className = "palette-item" + (placementMode === "measure" ? " active" : "");
+  measureBtn.innerHTML = '<span class="palette-dot" style="background:#0891b2;"></span><span>Pomiar odległości</span>';
+  measureBtn.title = "Stukaj na planie, żeby dodawać punkty pomiaru - suma odcinków (nawet między piętrami) liczy się automatycznie";
+  measureBtn.addEventListener("click", () => setPlacementMode("measure", "Pomiar odległości"));
+  symbolPaletteList.appendChild(measureBtn);
 
   for (const t of symbolTypesData) {
     const row = document.createElement("div");
@@ -268,6 +346,7 @@ const inventoryCategoryFilter = document.getElementById("inventory-category-filt
 const exportCsvLink = document.getElementById("export-csv-link");
 const fullReportBtn = document.getElementById("full-report-btn");
 const reportBtn = document.getElementById("report-btn");
+const calibrateBtn = document.getElementById("calibrate-btn");
 const symbolPaletteToggle = document.getElementById("symbol-palette-toggle");
 const symbolPaletteList = document.getElementById("symbol-palette-list");
 const paletteCurrentLabel = document.getElementById("palette-current-label");
@@ -322,6 +401,29 @@ const lightboxClose = document.getElementById("lightbox-close");
 const lightboxPrev = document.getElementById("lightbox-prev");
 const lightboxNext = document.getElementById("lightbox-next");
 
+const measurePanel = document.getElementById("measure-panel");
+const measurePanelTitle = document.getElementById("measure-panel-title");
+const measureCategory = document.getElementById("measure-category");
+const measureCategoryCustom = document.getElementById("measure-category-custom");
+const measureLabelInput = document.getElementById("measure-label");
+const measureSegmentsList = document.getElementById("measure-segments-list");
+const measureTotalValue = document.getElementById("measure-total-value");
+const measureWarning = document.getElementById("measure-warning");
+const measureUndoBtn = document.getElementById("measure-undo-point");
+const measureFinishBtn = document.getElementById("measure-finish");
+const measureCancelBtn = document.getElementById("measure-cancel");
+const measureDeleteBtn = document.getElementById("measure-delete");
+
+const pomiaryBuildingFilter = document.getElementById("pomiary-building-filter");
+const pomiaryCategoryFilter = document.getElementById("pomiary-category-filter");
+
+const valueModal = document.getElementById("value-modal");
+const valueModalTitle = document.getElementById("value-modal-title");
+const valueModalMessage = document.getElementById("value-modal-message");
+const valueModalInput = document.getElementById("value-modal-input");
+const valueModalOk = document.getElementById("value-modal-ok");
+const valueModalCancel = document.getElementById("value-modal-cancel");
+
 let buildingsData = [];
 let map = null;
 let imageOverlay = null;
@@ -335,7 +437,15 @@ let noteDebounceTimer = null;
 let currentPlanObjectUrl = null;
 let symbolTypesData = [];
 const symbolIconCache = new Map(); // symbolTypeId -> src (data: albo blob: URL)
-let placementMode = null; // null = zwykly punkt, albo id typu symbolu do stawiania
+let placementMode = null; // null = zwykly punkt, id typu symbolu, albo "measure" (pomiar dlugosci)
+
+// Pomiar w budowie/edycji (jeszcze niezapisany do bazy, albo zapisany ale z
+// doklejanymi na biezaco kolejnymi punktami) - patrz sekcja "Pomiar dlugosci".
+let activeMeasurement = null; // { id?, buildingCode, category, label, points:[], segments:[] }
+let measurementLeafletLayers = []; // warstwy (markery+linie) pomiarow na aktualnie widocznym planie
+let calibrating = false;
+let calibrationPoint1 = null; // {x,y} pierwszy stukniety punkt kalibracji skali
+let calibrationMarker1 = null; // tymczasowy L.circleMarker dla powyzszego
 
 symbolPaletteToggle.addEventListener("click", () => {
   symbolPaletteList.classList.toggle("hidden");
@@ -345,10 +455,52 @@ function planKeyOf(buildingCode, file) {
   return `${buildingCode}::${file}`;
 }
 
+// Generyczny modal "podaj liczbę" (kalibracja skali, ręczna długość odcinka
+// pomiaru) - zwraca Promise<number|null> (null = anulowano/wpisano śmieci).
+let valueModalResolve = null;
+
+function askNumberModal(title, message, defaultValue) {
+  valueModalTitle.textContent = title;
+  valueModalMessage.textContent = message;
+  valueModalInput.value = defaultValue != null ? defaultValue : "";
+  valueModal.classList.remove("hidden");
+  setTimeout(() => valueModalInput.focus(), 50);
+  return new Promise((resolve) => {
+    valueModalResolve = resolve;
+  });
+}
+
+function closeValueModal(result) {
+  valueModal.classList.add("hidden");
+  const resolve = valueModalResolve;
+  valueModalResolve = null;
+  if (resolve) resolve(result);
+}
+
+valueModalOk.addEventListener("click", () => {
+  const v = parseFloat(String(valueModalInput.value).replace(",", "."));
+  closeValueModal(Number.isFinite(v) ? v : null);
+});
+valueModalCancel.addEventListener("click", () => closeValueModal(null));
+valueModal.addEventListener("click", (e) => {
+  if (e.target === valueModal) closeValueModal(null); // klik w tlo = anuluj
+});
+valueModalInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    valueModalOk.click();
+  }
+  if (e.key === "Escape") {
+    e.preventDefault();
+    closeValueModal(null);
+  }
+});
+
 const DEFAULT_CATEGORIES = [
   "Czujki a zwierzęta pozostawione na noc",
   "Propozycja lokalizacji punktów odbicia się dla ochroniarza",
   "Aktualizacja planów IBP",
+  "DOSTAWA",
 ];
 
 // Lista kategorii = kategorie domyslne (pomniejszone o usuniete przez uzytkownika,
@@ -519,10 +671,12 @@ async function loadBuildings() {
   if (!buildingsData.length) {
     emptyState.classList.remove("hidden");
     reportBtn.classList.add("hidden");
+    calibrateBtn.classList.add("hidden");
     return;
   }
   emptyState.classList.add("hidden");
   reportBtn.classList.remove("hidden");
+  calibrateBtn.classList.remove("hidden");
 
   // Wracamy do ostatnio uzywanego budynku/kondygnacji (jesli nadal istnieje wsrod
   // wczytanych planow), zeby nie trzeba bylo za kazdym razem wyszukiwac ich od nowa.
@@ -560,6 +714,7 @@ async function loadPlans(buildingCode, preferredFile) {
     await selectPlan(buildingCode, chosen.file, chosen.name);
   }
   await loadInventory();
+  await loadPomiary();
 }
 
 function initMapIfNeeded() {
@@ -579,6 +734,15 @@ function loadImageDimensions(url) {
 
 async function selectPlan(buildingCode, file, name) {
   await closeMarkerPanel();
+  // Kalibracja (2 stukniecia) jest przywiazana do jednego, konkretnego planu -
+  // zmiana planu/budynku w trakcie musi ja anulowac, inaczej punkt 1. sprzed
+  // zmiany i punkt 2. po zmianie policzylyby bezsensowna, fikcyjna odleglosc.
+  if (calibrating) {
+    calibrating = false;
+    calibrationPoint1 = null;
+    clearCalibrationMarker();
+    setCalibrateBtnLabel();
+  }
   currentPlanFile = file;
   currentPlanName = name;
   currentPlanKey = planKeyOf(buildingCode, file);
@@ -603,6 +767,7 @@ async function selectPlan(buildingCode, file, name) {
 
   const markers = await dbGetMarkersByPlan(currentPlanKey);
   for (const m of markers) addLeafletMarker(m);
+  await renderMeasurementsForPlan(currentPlanKey);
 }
 
 function addLeafletMarker(m) {
@@ -809,6 +974,15 @@ function resetPhotoInput() {
 }
 
 async function onMapClick(e) {
+  if (calibrating) {
+    await handleCalibrationClick(e.latlng);
+    return;
+  }
+  if (placementMode === "measure") {
+    await addMeasurementVertex(e.latlng);
+    return;
+  }
+
   const now = new Date().toISOString();
   const marker = await dbAddMarker({
     buildingCode: currentBuildingCode,
@@ -832,6 +1006,400 @@ async function onMapClick(e) {
   // automatycznie - pozwala szybko postawic kilka tych samych symboli pod rzad
   // bez przerywania; nadal zapisuje sie natychmiast w bazie.
   if (!placementMode) openMarkerPanel(marker);
+}
+
+// --- Pomiar dlugosci (przejscia/dojscia ewakuacyjne i inne wymiary) ---
+//
+// Kazdy punkt pomiaru pamieta, na ktorym planie (planKey) zostal postawiony -
+// dzieki temu jeden pomiar moze biec przez kilka kondygnacji/rzutow (np. przez
+// klatke schodowa): odcinek miedzy punktami na TYM SAMYM planie liczy sie z
+// pikseli * skala kalibracji tego planu, a odcinek miedzy RÓŻNYMI planami (albo
+// na planie bez ustawionej skali) trzeba wpisac recznie (np. dlugosc biegu
+// schodow) - nie da sie go policzyc geometrycznie ze wspolrzednych.
+
+function pixelDist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function formatMeters(v) {
+  return v.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " m";
+}
+
+// Zwraca {lengthM, manual, crossPlan} dla nowego odcinka albo null, jesli
+// uzytkownik anulowal wpisywanie recznej dlugosci - wtedy NIE dodajemy punktu,
+// zeby kazdy istniejacy punkt zawsze mial rozwiazany poprzedzajacy odcinek.
+async function resolveSegment(prev, next) {
+  if (prev.planKey === next.planKey) {
+    const rec = await dbGetPlanImageByKey(prev.planKey);
+    if (rec && rec.scaleMPerPx) {
+      return { lengthM: pixelDist(prev, next) * rec.scaleMPerPx, manual: false, crossPlan: false };
+    }
+    const val = await askNumberModal(
+      "Długość odcinka",
+      `Plan „${prev.planName}” nie ma jeszcze ustawionej skali (patrz przycisk „Kalibruj skalę”) — podaj długość tego odcinka ręcznie, w metrach.`,
+      ""
+    );
+    if (val == null || !(val >= 0)) return null;
+    return { lengthM: val, manual: true, crossPlan: false };
+  }
+  const val = await askNumberModal(
+    "Długość odcinka między planami",
+    `Ten punkt jest na innym planie niż poprzedni („${prev.planName}” → „${next.planName}”). Podaj długość tego odcinka ręcznie, w metrach (np. długość biegu schodów).`,
+    ""
+  );
+  if (val == null || !(val >= 0)) return null;
+  return { lengthM: val, manual: true, crossPlan: true };
+}
+
+async function addMeasurementVertex(latlng) {
+  const point = {
+    planKey: currentPlanKey,
+    planFile: currentPlanFile,
+    planName: currentPlanName,
+    x: latlng.lng,
+    y: latlng.lat,
+  };
+
+  if (!activeMeasurement) {
+    activeMeasurement = { buildingCode: currentBuildingCode, category: "", label: "", points: [], segments: [] };
+  }
+
+  const points = activeMeasurement.points;
+  if (points.length > 0) {
+    const seg = await resolveSegment(points[points.length - 1], point);
+    if (!seg) return;
+    activeMeasurement.segments.push(seg);
+  }
+  points.push(point);
+
+  await openMeasurePanel(activeMeasurement);
+  await renderMeasurementsForPlan(currentPlanKey);
+}
+
+// --- Kalibracja skali planu: stuknij 2 punkty o znanej rzeczywistej odleglosci
+// (np. szerokosc futryny drzwi, wymiar z rysunku) i podaj te odleglosc w metrach.
+function setCalibrateBtnLabel() {
+  if (!calibrating) {
+    calibrateBtn.textContent = "Kalibruj skalę";
+    return;
+  }
+  calibrateBtn.textContent = calibrationPoint1 ? "Stuknij punkt 2 (tu = anuluj)" : "Stuknij punkt 1 (tu = anuluj)";
+}
+
+function clearCalibrationMarker() {
+  if (calibrationMarker1) {
+    map.removeLayer(calibrationMarker1);
+    calibrationMarker1 = null;
+  }
+}
+
+calibrateBtn.addEventListener("click", () => {
+  if (calibrating) {
+    calibrating = false;
+    calibrationPoint1 = null;
+    clearCalibrationMarker();
+    setCalibrateBtnLabel();
+    return;
+  }
+  if (activeMeasurement) {
+    alert("Zakończ albo anuluj bieżący pomiar (panel po prawej), zanim skalibrujesz plan.");
+    return;
+  }
+  calibrating = true;
+  calibrationPoint1 = null;
+  setCalibrateBtnLabel();
+});
+
+async function handleCalibrationClick(latlng) {
+  if (!calibrationPoint1) {
+    calibrationPoint1 = { x: latlng.lng, y: latlng.lat };
+    calibrationMarker1 = L.circleMarker(latlng, {
+      radius: 6,
+      color: "#1d4ed8",
+      weight: 2,
+      fillColor: "#1d4ed8",
+      fillOpacity: 0.9,
+    }).addTo(map);
+    setCalibrateBtnLabel();
+    return;
+  }
+
+  const p2 = { x: latlng.lng, y: latlng.lat };
+  const pxDist = pixelDist(calibrationPoint1, p2);
+  clearCalibrationMarker();
+  calibrating = false;
+  calibrationPoint1 = null;
+  setCalibrateBtnLabel();
+  if (pxDist < 1) return;
+
+  const realM = await askNumberModal(
+    "Kalibracja skali",
+    "Podaj rzeczywistą długość zaznaczonego odcinka w metrach (np. znana szerokość drzwi albo wymiar podany na rysunku).",
+    ""
+  );
+  if (realM == null || !(realM > 0)) return;
+  await dbSetPlanScale(currentPlanKey, realM / pxDist);
+  alert(`Zapisano skalę planu „${currentPlanName}”.`);
+  await renderMeasurementsForPlan(currentPlanKey);
+}
+
+// --- Panel pomiaru (analogicznie do panelu punktu) ---
+const MEASUREMENT_DEFAULT_CATEGORIES = ["Przejście ewakuacyjne", "Dojście ewakuacyjne", "Inne"];
+
+async function knownMeasurementCategories() {
+  const removedDefaults = (await dbGetMeta("removedDefaultMeasurementCategories")) || [];
+  const measurements = await dbGetAllMeasurements();
+  const set = new Set(MEASUREMENT_DEFAULT_CATEGORIES.filter((c) => !removedDefaults.includes(c)));
+  for (const m of measurements) if (m.category) set.add(m.category);
+  return Array.from(set).sort((a, b) => a.localeCompare(b, "pl"));
+}
+
+async function populateMeasureCategorySelect(selected) {
+  const cats = await knownMeasurementCategories();
+  measureCategory.innerHTML = "";
+  const optNone = document.createElement("option");
+  optNone.value = "";
+  optNone.textContent = "(brak)";
+  measureCategory.appendChild(optNone);
+  for (const c of cats) {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    measureCategory.appendChild(opt);
+  }
+  const optCustom = document.createElement("option");
+  optCustom.value = "__custom__";
+  optCustom.textContent = "+ Nowa kategoria…";
+  measureCategory.appendChild(optCustom);
+  measureCategory.value = selected && cats.includes(selected) ? selected : "";
+  measureCategoryCustom.classList.add("hidden");
+}
+
+measureCategory.addEventListener("change", () => {
+  if (measureCategory.value === "__custom__") {
+    measureCategoryCustom.classList.remove("hidden");
+    measureCategoryCustom.value = "";
+    measureCategoryCustom.focus();
+    return;
+  }
+  if (activeMeasurement) activeMeasurement.category = measureCategory.value;
+});
+
+function saveMeasureCustomCategory() {
+  const value = measureCategoryCustom.value.trim();
+  measureCategoryCustom.classList.add("hidden");
+  if (!value) {
+    measureCategory.value = "";
+    if (activeMeasurement) activeMeasurement.category = "";
+    return;
+  }
+  if (activeMeasurement) activeMeasurement.category = value;
+  populateMeasureCategorySelect(value);
+}
+measureCategoryCustom.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    saveMeasureCustomCategory();
+  }
+});
+measureCategoryCustom.addEventListener("blur", saveMeasureCustomCategory);
+
+measureLabelInput.addEventListener("input", () => {
+  if (activeMeasurement) activeMeasurement.label = measureLabelInput.value;
+});
+
+function renderMeasureSegmentsList(m) {
+  measureSegmentsList.innerHTML = "";
+  let total = 0;
+  let hasCrossPlan = false;
+  for (let i = 0; i < m.segments.length; i++) {
+    const seg = m.segments[i];
+    total += seg.lengthM;
+    if (seg.crossPlan) hasCrossPlan = true;
+    const fromPt = m.points[i];
+    const toPt = m.points[i + 1];
+    const planLabel = seg.crossPlan ? `${fromPt.planName} → ${toPt.planName}` : fromPt.planName;
+    const row = document.createElement("div");
+    row.className = "measure-segment-row" + (seg.manual ? " manual" : "");
+    row.innerHTML =
+      `<span>${i + 1} → ${i + 2}<span class="seg-plan">${planLabel}${seg.manual ? " · ręcznie" : ""}</span></span>` +
+      `<span class="seg-len">${formatMeters(seg.lengthM)}</span>`;
+    measureSegmentsList.appendChild(row);
+  }
+  measureTotalValue.textContent = formatMeters(total);
+  measureUndoBtn.disabled = m.points.length === 0;
+  measureFinishBtn.disabled = m.points.length < 2;
+  if (hasCrossPlan) {
+    measureWarning.textContent =
+      "Pomiar przechodzi między planami — te odcinki wpisano ręcznie i nie przeliczą się same po zmianie kalibracji.";
+    measureWarning.classList.remove("hidden");
+  } else {
+    measureWarning.classList.add("hidden");
+  }
+}
+
+async function openMeasurePanel(m) {
+  measurePanelTitle.textContent = m.id != null ? `Pomiar #${m.id}` : "Nowy pomiar";
+  await populateMeasureCategorySelect(m.category || "");
+  measureLabelInput.value = m.label || "";
+  measureDeleteBtn.classList.toggle("hidden", m.id == null);
+  renderMeasureSegmentsList(m);
+  measurePanel.classList.remove("hidden");
+}
+
+async function closeMeasurePanel() {
+  activeMeasurement = null;
+  measurePanel.classList.add("hidden");
+  await renderMeasurementsForPlan(currentPlanKey);
+}
+
+measureUndoBtn.addEventListener("click", async () => {
+  if (!activeMeasurement || !activeMeasurement.points.length) return;
+  activeMeasurement.points.pop();
+  if (activeMeasurement.segments.length) activeMeasurement.segments.pop();
+  if (!activeMeasurement.points.length) {
+    await closeMeasurePanel();
+    return;
+  }
+  renderMeasureSegmentsList(activeMeasurement);
+  await renderMeasurementsForPlan(currentPlanKey);
+});
+
+measureCancelBtn.addEventListener("click", async () => {
+  await closeMeasurePanel();
+  if (placementMode === "measure") setPlacementMode(null, "Punkt");
+});
+
+measureFinishBtn.addEventListener("click", async () => {
+  if (!activeMeasurement || activeMeasurement.points.length < 2) return;
+  const now = new Date().toISOString();
+  const payload = {
+    buildingCode: activeMeasurement.buildingCode,
+    category: activeMeasurement.category || "",
+    label: activeMeasurement.label || "",
+    points: activeMeasurement.points,
+    segments: activeMeasurement.segments,
+    updatedAt: now,
+  };
+  if (activeMeasurement.id != null) {
+    await dbUpdateMeasurement(activeMeasurement.id, payload);
+  } else {
+    await dbAddMeasurement({ ...payload, createdAt: now });
+  }
+  await closeMeasurePanel();
+  if (placementMode === "measure") setPlacementMode(null, "Punkt");
+  await loadPomiary();
+});
+
+measureDeleteBtn.addEventListener("click", async () => {
+  if (!activeMeasurement || activeMeasurement.id == null) return;
+  if (!confirm("Usunąć cały ten pomiar?")) return;
+  await dbDeleteMeasurement(activeMeasurement.id);
+  await closeMeasurePanel();
+  if (placementMode === "measure") setPlacementMode(null, "Punkt");
+  await loadPomiary();
+});
+
+// --- Rysowanie pomiarow na mapie (tylko wierzcholki/odcinki nalezace do
+// aktualnie wyswietlanego planu - reszta trasy jest na innych planach) ---
+function clearMeasurementLayers() {
+  for (const layer of measurementLeafletLayers) map.removeLayer(layer);
+  measurementLeafletLayers = [];
+}
+
+function measureVertexIcon(globalIndex, opts) {
+  const color = opts.active ? "#1d4ed8" : "#0891b2";
+  const badge = opts.crossPlanIn || opts.crossPlanOut
+    ? `<div style="position:absolute;top:-4px;right:-4px;font-size:9px;line-height:1;">⇅</div>`
+    : "";
+  return L.divIcon({
+    className: "",
+    html: `<div style="position:relative;width:20px;height:20px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 3px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;color:white;font-size:10px;font-weight:bold;">${globalIndex}${badge}</div>`,
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
+  });
+}
+
+async function editMeasurementFromList(id) {
+  if (activeMeasurement && activeMeasurement.id === id) {
+    await openMeasurePanel(activeMeasurement); // juz edytowany - tylko pokaz panel, nie gub niezapisanych punktow
+    return;
+  }
+  if (activeMeasurement) {
+    if (!confirm("Masz niezapisany pomiar w toku. Otworzenie innego pomiaru go porzuci. Kontynuować?")) return;
+    await closeMeasurePanel();
+  }
+  const all = await dbGetAllMeasurements();
+  const m = all.find((x) => x.id === id);
+  if (!m || !m.points.length) return;
+  document.querySelector('.tab-btn[data-tab="map"]').click();
+  const firstPoint = m.points[0];
+  if (m.buildingCode !== currentBuildingCode) {
+    buildingSelect.value = m.buildingCode;
+    await loadPlans(m.buildingCode, firstPoint.planFile);
+  } else if (firstPoint.planFile !== currentPlanFile) {
+    planSelect.value = firstPoint.planFile;
+    await selectPlan(m.buildingCode, firstPoint.planFile, firstPoint.planName);
+  }
+  activeMeasurement = {
+    id: m.id,
+    buildingCode: m.buildingCode,
+    category: m.category || "",
+    label: m.label || "",
+    points: [...m.points],
+    segments: [...m.segments],
+  };
+  placementMode = "measure";
+  paletteCurrentLabel.textContent = "Pomiar odległości";
+  renderSymbolPalette();
+  await openMeasurePanel(activeMeasurement);
+  await renderMeasurementsForPlan(currentPlanKey);
+}
+
+async function renderMeasurementsForPlan(planKey) {
+  if (!map || !planKey) return;
+  clearMeasurementLayers();
+
+  const saved = currentBuildingCode ? await dbGetMeasurementsByBuilding(currentBuildingCode) : [];
+  const all = activeMeasurement ? [...saved.filter((m) => m.id !== activeMeasurement.id), activeMeasurement] : saved;
+
+  for (const m of all) {
+    const isActive = activeMeasurement === m;
+
+    for (let i = 0; i < m.segments.length; i++) {
+      const seg = m.segments[i];
+      if (seg.crossPlan) continue;
+      const a = m.points[i];
+      const b = m.points[i + 1];
+      if (a.planKey !== planKey) continue;
+      const line = L.polyline([[a.y, a.x], [b.y, b.x]], {
+        color: isActive ? "#1d4ed8" : "#0891b2",
+        weight: 3,
+        dashArray: seg.manual ? "6 4" : null,
+      }).addTo(map);
+      measurementLeafletLayers.push(line);
+    }
+
+    for (let i = 0; i < m.points.length; i++) {
+      const p = m.points[i];
+      if (p.planKey !== planKey) continue;
+      const crossPlanIn = i > 0 && m.segments[i - 1] && m.segments[i - 1].crossPlan;
+      const crossPlanOut = i < m.segments.length && m.segments[i] && m.segments[i].crossPlan;
+      const marker = L.marker([p.y, p.x], {
+        icon: measureVertexIcon(i + 1, { crossPlanIn, crossPlanOut, active: isActive }),
+      }).addTo(map);
+      if (!isActive) {
+        marker.on("click", (e) => {
+          L.DomEvent.stopPropagation(e);
+          editMeasurementFromList(m.id);
+        });
+        let title = m.label || m.category || `Pomiar #${m.id}`;
+        if (crossPlanIn || crossPlanOut) title += " (przechodzi na inny plan)";
+        marker.bindTooltip(title, { direction: "top" });
+      }
+      measurementLeafletLayers.push(marker);
+    }
+  }
 }
 
 async function openMarkerPanel(m) {
@@ -1121,7 +1689,19 @@ markerDeleteBtn.addEventListener("click", async () => {
 
 markerCloseBtn.addEventListener("click", closeMarkerPanel);
 
-buildingSelect.addEventListener("change", () => loadPlans(buildingSelect.value));
+buildingSelect.addEventListener("change", async () => {
+  // Pomiar w toku ma sens tylko w obrebie jednego budynku (jego punkty
+  // wskazuja na konkretne plany tego budynku) - zmiana budynku go porzuca.
+  if (activeMeasurement) {
+    if (!confirm("Masz niezapisany pomiar w toku. Zmiana budynku go porzuci. Kontynuować?")) {
+      buildingSelect.value = currentBuildingCode;
+      return;
+    }
+    await closeMeasurePanel();
+    if (placementMode === "measure") setPlacementMode(null, "Punkt");
+  }
+  loadPlans(buildingSelect.value);
+});
 planSelect.addEventListener("change", () => {
   const opt = planSelect.options[planSelect.selectedIndex];
   selectPlan(currentBuildingCode, opt.value, opt.textContent);
@@ -1138,9 +1718,90 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
     document.getElementById(`tab-${btn.dataset.tab}`).classList.add("active");
     if (btn.dataset.tab === "map" && map) setTimeout(() => map.invalidateSize(), 50);
     if (btn.dataset.tab === "inventory") loadInventory();
+    if (btn.dataset.tab === "pomiary") loadPomiary();
     if (btn.dataset.tab === "backup") refreshBackupInfo();
   });
 });
+
+// --- Zakladka Pomiary ---
+pomiaryBuildingFilter.addEventListener("change", loadPomiary);
+pomiaryCategoryFilter.addEventListener("change", loadPomiary);
+
+function populatePomiaryBuildingFilter() {
+  const current = pomiaryBuildingFilter.value;
+  pomiaryBuildingFilter.innerHTML = '<option value="">Wszystkie</option>';
+  for (const b of buildingsData) {
+    const opt = document.createElement("option");
+    opt.value = b.code;
+    opt.textContent = b.name;
+    pomiaryBuildingFilter.appendChild(opt);
+  }
+  if (buildingsData.some((b) => b.code === current)) pomiaryBuildingFilter.value = current;
+}
+
+async function refreshPomiaryCategoryFilterOptions() {
+  const cats = await knownMeasurementCategories();
+  const current = pomiaryCategoryFilter.value;
+  pomiaryCategoryFilter.innerHTML = '<option value="">Wszystkie</option>';
+  for (const c of cats) {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    pomiaryCategoryFilter.appendChild(opt);
+  }
+  if (cats.includes(current)) pomiaryCategoryFilter.value = current;
+}
+
+function measurementTotal(m) {
+  return m.segments.reduce((sum, s) => sum + s.lengthM, 0);
+}
+
+function measurementPlanSpan(m) {
+  const names = [];
+  for (const p of m.points) if (!names.includes(p.planName)) names.push(p.planName);
+  return names.join(" → ");
+}
+
+async function loadPomiary() {
+  if (!buildingsData.length) return;
+  populatePomiaryBuildingFilter();
+  await refreshPomiaryCategoryFilterOptions();
+  const buildingFilter = pomiaryBuildingFilter.value;
+  const categoryFilter = pomiaryCategoryFilter.value;
+  let measurements = buildingFilter ? await dbGetMeasurementsByBuilding(buildingFilter) : await dbGetAllMeasurements();
+  if (categoryFilter) measurements = measurements.filter((m) => m.category === categoryFilter);
+  measurements.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+
+  const tbody = document.querySelector("#pomiary-table tbody");
+  tbody.innerHTML = "";
+  measurements.forEach((m, idx) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${idx + 1}</td>
+      <td>${m.buildingCode}</td>
+      <td>${(m.category || "").replace(/</g, "&lt;")}</td>
+      <td>${(m.label || "").replace(/</g, "&lt;")}</td>
+      <td>${measurementPlanSpan(m).replace(/</g, "&lt;")}</td>
+      <td>${formatMeters(measurementTotal(m))}</td>
+      <td>${(m.createdAt || "").replace("T", " ").slice(0, 19)}</td>
+      <td class="row-actions"><a data-id="${m.id}">Pokaż/edytuj</a> · <a data-del="${m.id}">Usuń</a></td>
+    `;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll("a[data-id]").forEach((a) => {
+    a.addEventListener("click", () => editMeasurementFromList(Number(a.dataset.id)));
+  });
+  tbody.querySelectorAll("a[data-del]").forEach((a) => {
+    a.addEventListener("click", async () => {
+      const id = Number(a.dataset.del);
+      if (!confirm("Usunąć ten pomiar?")) return;
+      await dbDeleteMeasurement(id);
+      if (activeMeasurement && activeMeasurement.id === id) await closeMeasurePanel();
+      await loadPomiary();
+      await renderMeasurementsForPlan(currentPlanKey);
+    });
+  });
+}
 
 // --- Inventory tab ---
 // Filtry budynku i kondygnacji sa niezalezne od tego, co jest akurat pokazane na mapie -
@@ -1419,7 +2080,7 @@ async function importBackupPayload(parsed) {
   let plansImported = 0;
   for (const r of planRecords) {
     const blob = dataUrlToBlob(r.image);
-    await dbPutPlanImage({
+    await dbPutPlanImagePreserveScale({
       key: planKeyOf(r.buildingCode, r.file),
       buildingCode: r.buildingCode,
       buildingName: r.buildingName || r.buildingCode,
@@ -1587,7 +2248,7 @@ importPlansInput.addEventListener("change", async () => {
         const records = JSON.parse(text);
         for (const r of records) {
           const blob = dataUrlToBlob(r.image);
-          await dbPutPlanImage({
+          await dbPutPlanImagePreserveScale({
             key: planKeyOf(r.buildingCode, r.file),
             buildingCode: r.buildingCode,
             buildingName: r.buildingName || r.buildingCode,
@@ -1804,7 +2465,7 @@ planAddSubmitBtn.addEventListener("click", async () => {
 
   planAddSubmitBtn.disabled = true;
   try {
-    await dbPutPlanImage({
+    await dbPutPlanImagePreserveScale({
       key: planKeyOf(code, fileName),
       buildingCode: code,
       buildingName,

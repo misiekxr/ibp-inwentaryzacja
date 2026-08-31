@@ -140,11 +140,18 @@ main {
 
 #empty-state.hidden { display: none; }
 
-.fab {
+.fab-stack {
   position: absolute;
   left: 12px;
   bottom: 12px;
   z-index: 900;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.fab {
   box-shadow: 0 4px 12px rgba(0,0,0,0.25);
 }
 
@@ -261,7 +268,8 @@ main {
   padding: 4px;
 }
 
-#marker-panel {
+#marker-panel,
+#measure-panel {
   position: absolute;
   top: 12px;
   right: 12px;
@@ -280,10 +288,90 @@ main {
   gap: 8px;
 }
 
-#marker-panel.hidden { display: none; }
+#marker-panel.hidden, #measure-panel.hidden { display: none; }
 
-#marker-panel h3 { margin: 0 0 4px 0; font-size: 0.95rem; }
-#marker-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: var(--muted); }
+#marker-panel h3, #measure-panel h3 { margin: 0 0 4px 0; font-size: 0.95rem; }
+#marker-panel label, #measure-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: var(--muted); }
+
+.measure-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.measure-segments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.measure-segments-list:empty::before {
+  content: "Brak punktów — stuknij na planie.";
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.measure-segment-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.measure-segment-row .seg-len { font-weight: 600; white-space: nowrap; }
+.measure-segment-row.manual .seg-len { color: var(--accent); }
+.measure-segment-row .seg-plan { color: var(--muted); font-size: 0.72rem; display: block; }
+
+.measure-total {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.measure-warning {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #92400e;
+  background: #fef3c7;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+#value-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 3100;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+#value-modal.hidden { display: none; }
+
+.value-modal-box {
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 16px;
+  width: 300px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+}
+
+.value-modal-box h3 { margin: 0; font-size: 0.95rem; }
+.value-modal-box p { margin: 0; font-size: 0.82rem; color: var(--muted); }
+.value-modal-box input { font-size: 1rem; width: 100%; }
 
 .status-toggle {
   flex-direction: row !important;
@@ -504,7 +592,8 @@ table .thumb {
 
 /* Na waskich ekranach (telefon): panel jako wysuwany dol, zawsze w zasiegu kciuka */
 @media (max-width: 640px) {
-  #marker-panel {
+  #marker-panel,
+  #measure-panel {
     position: fixed;
     top: auto;
     left: 0;

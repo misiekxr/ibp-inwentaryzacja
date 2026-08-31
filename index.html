@@ -30,6 +30,7 @@
   <nav class="tabs">
     <button class="tab-btn active" data-tab="map">Mapa</button>
     <button class="tab-btn" data-tab="inventory">Inwentaryzacja</button>
+    <button class="tab-btn" data-tab="pomiary">Pomiary</button>
     <button class="tab-btn" data-tab="backup">Kopia zapasowa</button>
   </nav>
 </header>
@@ -47,7 +48,10 @@
       </button>
       <div id="symbol-palette-list" class="symbol-palette-list hidden"></div>
     </div>
-    <button id="report-btn" class="fab hidden" title="Raport tego rzutu (PDF)">Raport</button>
+    <div class="fab-stack">
+      <button id="calibrate-btn" class="fab hidden secondary" title="Skalibruj skalę tego planu, żeby pomiary liczyły metry">Kalibruj skalę</button>
+      <button id="report-btn" class="fab hidden" title="Raport tego rzutu (PDF)">Raport</button>
+    </div>
     <div id="marker-panel" class="hidden">
       <h3 id="marker-panel-title">Punkt</h3>
       <label class="status-toggle">
@@ -82,6 +86,29 @@
         <button id="marker-delete" class="danger">Usuń punkt</button>
         <button id="marker-close" class="secondary">Zamknij</button>
       </div>
+    </div>
+
+    <div id="measure-panel" class="hidden">
+      <h3 id="measure-panel-title">Pomiar długości</h3>
+      <p class="measure-hint">Stukaj na planie, żeby dodawać kolejne punkty — możesz też zmienić kondygnację/plan w trakcie, np. przy pomiarze dojścia ewakuacyjnego przez klatkę schodową.</p>
+      <label>Kategoria
+        <select id="measure-category"></select>
+      </label>
+      <input type="text" id="measure-category-custom" class="hidden" placeholder="Wpisz nową kategorię i zatwierdź Enter">
+      <label>Opis / etykieta
+        <input type="text" id="measure-label" placeholder="np. Sala 1.12 do klatki A">
+      </label>
+      <div id="measure-segments-list" class="measure-segments-list"></div>
+      <p class="measure-total">Razem: <span id="measure-total-value">0,00 m</span></p>
+      <p id="measure-warning" class="measure-warning hidden"></p>
+      <div class="marker-panel-actions">
+        <button type="button" id="measure-undo-point" class="secondary">Cofnij ostatni punkt</button>
+      </div>
+      <div class="marker-panel-actions">
+        <button type="button" id="measure-finish">Zakończ i zapisz</button>
+        <button type="button" id="measure-cancel" class="secondary">Anuluj</button>
+      </div>
+      <button type="button" id="measure-delete" class="danger hidden">Usuń cały pomiar</button>
     </div>
   </section>
 
@@ -122,6 +149,36 @@
           <th>Kategoria</th>
           <th>Uwagi</th>
           <th>Zdjęcie</th>
+          <th>Utworzono</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section id="tab-pomiary" class="tab-panel">
+    <div class="inventory-toolbar">
+      <label>Budynek:
+        <select id="pomiary-building-filter">
+          <option value="">Wszystkie</option>
+        </select>
+      </label>
+      <label>Kategoria:
+        <select id="pomiary-category-filter">
+          <option value="">Wszystkie</option>
+        </select>
+      </label>
+    </div>
+    <table id="pomiary-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Budynek</th>
+          <th>Kategoria</th>
+          <th>Opis</th>
+          <th>Plany</th>
+          <th>Długość</th>
           <th>Utworzono</th>
           <th></th>
         </tr>
@@ -206,6 +263,18 @@
 <div id="snackbar" class="hidden">
   <span id="snackbar-text"></span>
   <button id="snackbar-undo" type="button">Cofnij</button>
+</div>
+
+<div id="value-modal" class="hidden">
+  <div class="value-modal-box">
+    <h3 id="value-modal-title">Podaj wartość</h3>
+    <p id="value-modal-message"></p>
+    <input type="number" id="value-modal-input" inputmode="decimal" step="0.01" min="0">
+    <div class="marker-panel-actions">
+      <button type="button" id="value-modal-ok">Zatwierdź</button>
+      <button type="button" id="value-modal-cancel" class="secondary">Anuluj</button>
+    </div>
+  </div>
 </div>
 
 <div id="photo-lightbox" class="hidden">
