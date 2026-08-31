@@ -374,6 +374,7 @@ const markerCloseBtn = document.getElementById("marker-close");
 const exportBackupBtn = document.getElementById("export-backup-btn");
 const importBackupInput = document.getElementById("import-backup-input");
 const lastExportInfo = document.getElementById("last-export-info");
+const deviceLabelInput = document.getElementById("device-label-input");
 const backupDirSection = document.getElementById("backup-dir-section");
 const backupDirInfo = document.getElementById("backup-dir-info");
 const connectBackupDirBtn = document.getElementById("connect-backup-dir-btn");
@@ -1981,6 +1982,43 @@ function dataUrlToBlob(dataUrl) {
   return new Blob([bytes], { type: mime });
 }
 
+// --- Nazwa urzadzenia: dokladana do nazwy pliku kopii (i do jej srodka), zeby w
+// jednym, wspoldzielonym folderze kopii dalo sie rozroznic, z ktorego urzadzenia
+// pochodzi dany plik. Zgadywana raz przy pierwszym starcie, potem trzymana w
+// IndexedDB (meta) i edytowalna w zakladce "Kopia zapasowa".
+function guessDeviceLabel() {
+  const ua = navigator.userAgent || "";
+  if (/iPad/i.test(ua)) return "iPad";
+  if (/iPhone/i.test(ua)) return "iPhone";
+  if (/Android/i.test(ua)) return "Telefon Android";
+  if (/Windows/i.test(ua)) return "Komputer Windows";
+  if (/Macintosh/i.test(ua)) return "Mac";
+  return "Urządzenie";
+}
+
+async function ensureDeviceLabel() {
+  let label = await dbGetMeta("deviceLabel");
+  if (!label) {
+    label = guessDeviceLabel();
+    await dbSetMeta("deviceLabel", label);
+  }
+  deviceLabelInput.value = label;
+  return label;
+}
+
+async function saveDeviceLabel() {
+  const value = deviceLabelInput.value.trim() || guessDeviceLabel();
+  deviceLabelInput.value = value;
+  await dbSetMeta("deviceLabel", value);
+}
+deviceLabelInput.addEventListener("blur", saveDeviceLabel);
+deviceLabelInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    deviceLabelInput.blur();
+  }
+});
+
 async function refreshBackupInfo() {
   const last = await dbGetMeta("lastExportAt");
   if (last) {
@@ -2033,7 +2071,26 @@ async function buildBackupPayload() {
     });
   }
 
-  return { version: 2, exportedAt: new Date().toISOString(), markers: markerOut, planImages: planOut };
+  const measurements = await dbGetAllMeasurements();
+  const measurementOut = measurements.map((m) => ({
+    buildingCode: m.buildingCode,
+    category: m.category || "",
+    label: m.label || "",
+    points: m.points,
+    segments: m.segments,
+    createdAt: m.createdAt,
+    updatedAt: m.updatedAt,
+  }));
+
+  const device = (await dbGetMeta("deviceLabel")) || guessDeviceLabel();
+  return {
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    device,
+    markers: markerOut,
+    planImages: planOut,
+    measurements: measurementOut,
+  };
 }
 
 // Punkt uznajemy za juz istniejacy, jesli w tym samym budynku/planie jest juz
@@ -2044,6 +2101,7 @@ async function buildBackupPayload() {
 async function importBackupPayload(parsed) {
   const records = Array.isArray(parsed) ? parsed : parsed.markers || [];
   const planRecords = Array.isArray(parsed) ? [] : parsed.planImages || [];
+  const measurementRecords = Array.isArray(parsed) ? [] : parsed.measurements || [];
 
   const existing = await dbGetAllMarkers();
   const existingKeys = new Set(existing.map((m) => `${m.buildingCode}::${m.planFile}::${m.createdAt}`));
@@ -2092,7 +2150,30 @@ async function importBackupPayload(parsed) {
     plansImported++;
   }
 
-  return { imported, skipped, plansImported };
+  const existingMeasurements = await dbGetAllMeasurements();
+  const existingMeasurementKeys = new Set(existingMeasurements.map((m) => `${m.buildingCode}::${m.createdAt}`));
+  let measurementsImported = 0;
+  let measurementsSkipped = 0;
+  for (const r of measurementRecords) {
+    const key = `${r.buildingCode}::${r.createdAt}`;
+    if (existingMeasurementKeys.has(key)) {
+      measurementsSkipped++;
+      continue;
+    }
+    await dbAddMeasurement({
+      buildingCode: r.buildingCode,
+      category: r.category || "",
+      label: r.label || "",
+      points: r.points || [],
+      segments: r.segments || [],
+      createdAt: r.createdAt || new Date().toISOString(),
+      updatedAt: r.updatedAt || new Date().toISOString(),
+    });
+    existingMeasurementKeys.add(key);
+    measurementsImported++;
+  }
+
+  return { imported, skipped, plansImported, measurementsImported, measurementsSkipped };
 }
 
 // --- Zapis/odczyt kopii bezposrednio z folderu na dysku (File System Access API,
@@ -2185,12 +2266,14 @@ async function maybeAutoRestore() {
   try {
     const file = await latestEntry.getFile();
     const parsed = JSON.parse(await file.text());
-    const { imported, plansImported } = await importBackupPayload(parsed);
+    const { imported, plansImported, measurementsImported } = await importBackupPayload(parsed);
     if (plansImported) await loadBuildings();
     await loadInventory();
+    await loadPomiary();
+    if (currentPlanKey) await renderMeasurementsForPlan(currentPlanKey);
     backupDirInfo.textContent =
       `Folder na dysku: „${handle.name}” ✓ — automatycznie przywrócono ${latestEntry.name} ` +
-      `(${imported} punktów, ${plansImported} planów)`;
+      `(${imported} punktów, ${plansImported} planów, ${measurementsImported} pomiarów)`;
   } catch (err) {
     console.warn("Automatyczne przywracanie kopii nie powiodło się:", err);
   }
@@ -2203,8 +2286,13 @@ exportBackupBtn.addEventListener("click", async () => {
     const blob = new Blob([JSON.stringify(out)], { type: "application/json" });
     const now = new Date();
     const pad = (n) => String(n).padStart(2, "0");
+    // Znacznik czasu musi zostac PIERWSZA zmienna czescia nazwy (zaraz po stalym
+    // prefiksie) - tylko wtedy proste porownanie tekstowe nazw plikow w
+    // maybeAutoRestore() nadal poprawnie znajduje NAJNOWSZY plik, nawet gdy w
+    // jednym, wspoldzielonym folderze ladują kopie z kilku roznych urzadzen.
     const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
-    const filename = `ibp-kopia-${stamp}.json`;
+    const device = sanitizeFilenamePart((await dbGetMeta("deviceLabel")) || guessDeviceLabel());
+    const filename = `ibp-kopia-${stamp}-${device}.json`;
     downloadBlob(blob, filename);
     const savedToDir = await saveBackupCopyToDir(filename, blob);
     await dbSetMeta("lastExportAt", new Date().toISOString());
@@ -2223,16 +2311,19 @@ importBackupInput.addEventListener("change", async () => {
   if (!file) return;
   const text = await file.text();
   const parsed = JSON.parse(text);
-  const { imported, skipped, plansImported } = await importBackupPayload(parsed);
+  const { imported, skipped, plansImported, measurementsImported, measurementsSkipped } = await importBackupPayload(parsed);
   importBackupInput.value = "";
   if (plansImported) await loadBuildings();
   alert(
     `Zaimportowano ${imported} punktów.` +
       (skipped ? ` Pominięto ${skipped} jako duplikaty (już istniały).` : "") +
-      (plansImported ? ` Wczytano ${plansImported} planów budynków.` : "")
+      (plansImported ? ` Wczytano ${plansImported} planów budynków.` : "") +
+      (measurementsImported ? ` Zaimportowano ${measurementsImported} pomiarów.` : "") +
+      (measurementsSkipped ? ` Pominięto ${measurementsSkipped} pomiarów jako duplikaty.` : "")
   );
   if (currentPlanKey) await selectPlan(currentBuildingCode, currentPlanFile, currentPlanName);
   await loadInventory();
+  await loadPomiary();
 });
 
 // --- Import planow budynkow (lokalnie, jednorazowo, mozna wiele plikow naraz) ---
@@ -2803,6 +2894,7 @@ if ("serviceWorker" in navigator) {
   await loadSymbolTypes();
   renderSymbolPalette();
   await loadBuildings();
+  await ensureDeviceLabel();
   await refreshBackupInfo();
   await refreshBackupDirUI();
   await maybeAutoRestore();
