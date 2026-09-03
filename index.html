@@ -43,6 +43,13 @@
     </div>
     <div id="map"></div>
     <div id="symbol-palette" class="symbol-palette">
+      <label class="palette-layer-select">Warstwa
+        <select id="placement-layer">
+          <option value="inventory">Inwentaryzacja IBP</option>
+          <option value="delivery">DOSTAWY / poprawki</option>
+          <option value="renovation">Nadzór nad remontem</option>
+        </select>
+      </label>
       <button type="button" id="symbol-palette-toggle" class="palette-toggle" title="Wybierz co stawiać na mapie po dotknięciu">
         Stawiam: <span id="palette-current-label">Punkt</span>
       </button>
@@ -54,6 +61,13 @@
     </div>
     <div id="marker-panel" class="hidden">
       <h3 id="marker-panel-title">Punkt</h3>
+      <label>Warstwa pracy
+        <select id="marker-layer">
+          <option value="inventory">Inwentaryzacja IBP</option>
+          <option value="delivery">DOSTAWY / poprawki</option>
+          <option value="renovation">Nadzór nad remontem</option>
+        </select>
+      </label>
       <label class="status-toggle">
         <input type="checkbox" id="marker-done">
         Załatwione
@@ -71,6 +85,12 @@
       </div>
       <label>Uwagi
         <textarea id="marker-note" rows="4" placeholder="Opis, uwagi..."></textarea>
+      </label>
+      <label>Termin wykonania
+        <input type="date" id="marker-due-date">
+      </label>
+      <label>Data ponownej weryfikacji
+        <input type="date" id="marker-review-date">
       </label>
       <div class="photo-add-row">
         <label class="photo-add-btn">Zrób zdjęcie
@@ -131,6 +151,14 @@
           <option value="done">Załatwione</option>
         </select>
       </label>
+      <label>Warstwa:
+        <select id="inventory-layer-filter">
+          <option value="">Wszystkie</option>
+          <option value="inventory">Inwentaryzacja IBP</option>
+          <option value="delivery">DOSTAWY / poprawki</option>
+          <option value="renovation">Nadzór nad remontem</option>
+        </select>
+      </label>
       <label>Kategoria:
         <select id="inventory-category-filter">
           <option value="">Wszystkie</option>
@@ -138,6 +166,7 @@
       </label>
       <a id="export-csv-link" href="#">Eksportuj CSV</a>
       <button id="full-report-btn" class="secondary" type="button">Raport zbiorczy PDF (czujki + ochrona)</button>
+      <button id="work-report-btn" type="button">Draft raportu zadań</button>
     </div>
     <table id="inventory-table">
       <thead>
@@ -146,8 +175,10 @@
           <th>Budynek</th>
           <th>Plan</th>
           <th>Status</th>
+          <th>Warstwa</th>
           <th>Kategoria</th>
           <th>Uwagi</th>
+          <th>Terminy</th>
           <th>Zdjęcie</th>
           <th>Utworzono</th>
           <th></th>
@@ -240,6 +271,15 @@
         <input type="text" id="plan-add-name" placeholder="np. Piętro 1">
       </label>
       <button id="plan-add-submit-btn" type="button" disabled>Dodaj plan</button>
+    </div>
+
+    <div class="backup-panel">
+      <h2>Raport zadań</h2>
+      <p>Wpisz adresy odbiorców. Raport PDF zostanie pobrany, a aplikacja przygotuje wiadomość e-mail.</p>
+      <label>Adresy e-mail (oddziel przecinkami)
+        <input type="text" id="report-emails" placeholder="np. ochrona@firma.pl, zarzadca@firma.pl">
+      </label>
+      <button id="save-report-settings-btn" type="button" class="secondary">Zapisz odbiorców</button>
     </div>
 
     <div class="backup-panel">
