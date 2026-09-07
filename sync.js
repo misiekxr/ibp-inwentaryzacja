@@ -42,8 +42,17 @@ function syncGuessDeviceName() {
   return "Nieznane urzadzenie";
 }
 
+// Usuwa koncowe "/" i koncowy "/api" niezaleznie od tego, ile razy ktos je
+// wklei - reszta kodu sama dokleja "/api/..." do adresu serwera, wiec ten
+// adres ma byc "goly" (bez /api).
+function syncNormalizeServerUrl(serverUrl) {
+  let url = serverUrl.trim().replace(/\/+$/, "");
+  while (/\/api$/i.test(url)) url = url.replace(/\/api$/i, "").replace(/\/+$/, "");
+  return url;
+}
+
 async function syncLogin(serverUrl, email, password) {
-  const url = serverUrl.replace(/\/+$/, "");
+  const url = syncNormalizeServerUrl(serverUrl);
   const res = await fetch(`${url}/api/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
