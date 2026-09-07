@@ -1,4 +1,4 @@
-const CACHE_VERSION = "ibp-v24";
+const CACHE_VERSION = "ibp-v25";
 
 const CORE_FILES = [
   "./",
@@ -6,6 +6,7 @@ const CORE_FILES = [
   "style.css",
   "sync.js",
   "app.js",
+  "building-locations.json",
   "manifest.json",
   "vendor/leaflet.js",
   "vendor/leaflet.css",

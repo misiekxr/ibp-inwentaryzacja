@@ -794,6 +794,23 @@ td.row-actions a {
 }
 .sync-conflict-item p { margin: 4px 0; }
 
+.sync-diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  margin-top: 8px;
+}
+.sync-diff-table th, .sync-diff-table td {
+  border: 1px solid var(--border);
+  padding: 4px 6px;
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+}
+.sync-diff-table th { background: var(--panel); }
+.sync-diff-row-changed { background: #fff8e1; }
+.sync-diff-table label { display: block; cursor: pointer; }
+
 #plan-add-status:empty { display: none; }
 
 #last-export-info {

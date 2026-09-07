@@ -376,6 +376,122 @@ async function syncResolveConflict(key, choice) {
   if (choice === "local") syncTryFlush();
 }
 
+// Rozstrzygniecie pole-po-polu: fieldChoices to { nazwaPola: "local" | "server" }
+// dla kazdego pola, ktore sie rozniglo (patrz syncBuildFieldDiff). Wynik to
+// nowy rekord zbudowany z wybranych wartosci, ktory od razu ladujemy z
+// powrotem do kolejki wysylki - jesli w miedzyczasie nikt inny go znowu nie
+// ruszyl, push powinien przejsc bez kolejnego konfliktu.
+async function syncResolveConflictFields(key, fieldChoices) {
+  const db = await dbPromise;
+  const conflict = await db.get("syncConflicts", key);
+  if (!conflict) return;
+  const store = SYNC_STORE[conflict.type];
+
+  const localData = conflict.localData || {};
+  const serverData = conflict.serverData || {};
+  const merged = { ...localData };
+  for (const [field, choice] of Object.entries(fieldChoices)) {
+    merged[field] = choice === "server" ? serverData[field] : localData[field];
+  }
+
+  const existing = (await db.get(store, conflict.id)) || {};
+  const record = { ...existing, ...merged, id: conflict.id, _syncUpdatedAt: conflict.serverUpdatedAt };
+  if (store === "markers" && !record.planKey) record.planKey = planKeyOf(record.buildingCode, record.planFile);
+  await db.put(store, record);
+
+  await db.delete("syncConflicts", key);
+  await syncRenderStatus();
+  await syncEnqueue(conflict.type, conflict.id, conflict.buildingCode);
+}
+
+function syncFormatValue(v) {
+  if (v === undefined) return "(brak)";
+  if (v === null || v === "") return "(puste)";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+// Buduje tabelke roznic pole-po-polu miedzy lokalna a serwerowa wersja
+// konfliktowego rekordu - pola identyczne po obu stronach sa tylko pokazane
+// (bez wyboru), pola rozne dostaja dwa przyciski radio (domyslnie zaznaczone
+// "Twoje", bo to zwykle ta wersja, ktora ma sie przed oczami w terenie).
+function syncBuildConflictBox(c) {
+  const box = document.createElement("div");
+  box.className = "sync-conflict-item";
+
+  const header = document.createElement("p");
+  header.innerHTML = `<strong>${c.type}</strong> — ${c.buildingCode || ""}`;
+  box.appendChild(header);
+
+  if (c.serverDeleted || !c.localData) {
+    const info = document.createElement("p");
+    info.textContent = c.serverDeleted
+      ? "Ten rekord zostal usuniety na innym urzadzeniu."
+      : "Ten rekord zostal usuniety lokalnie na tym urzadzeniu.";
+    box.appendChild(info);
+    const keepLocalBtn = document.createElement("button");
+    keepLocalBtn.type = "button";
+    keepLocalBtn.textContent = c.serverDeleted ? "Przywroc moja wersje" : "Zaakceptuj usuniecie";
+    keepLocalBtn.addEventListener("click", () => syncResolveConflict(c.key, c.serverDeleted ? "local" : "server"));
+    const keepServerBtn = document.createElement("button");
+    keepServerBtn.type = "button";
+    keepServerBtn.className = "secondary";
+    keepServerBtn.textContent = c.serverDeleted ? "Zaakceptuj usuniecie" : "Przywroc mimo to";
+    keepServerBtn.addEventListener("click", () => syncResolveConflict(c.key, c.serverDeleted ? "server" : "local"));
+    box.appendChild(keepLocalBtn);
+    box.appendChild(keepServerBtn);
+    return box;
+  }
+
+  const localData = c.localData;
+  const serverData = c.serverData || {};
+  const allKeys = Array.from(new Set([...Object.keys(localData), ...Object.keys(serverData)])).sort();
+
+  const table = document.createElement("table");
+  table.className = "sync-diff-table";
+  const theadRow = document.createElement("tr");
+  theadRow.innerHTML = "<th>Pole</th><th>Twoje</th><th>Serwer</th>";
+  table.appendChild(theadRow);
+
+  const radioGroupPrefix = `conflict-${c.key}`;
+  const differingFields = [];
+  for (const field of allKeys) {
+    const lv = localData[field];
+    const sv = serverData[field];
+    const same = JSON.stringify(lv) === JSON.stringify(sv);
+    const row = document.createElement("tr");
+    if (same) {
+      row.innerHTML = `<td>${field}</td><td colspan="2">${syncFormatValue(lv)}</td>`;
+    } else {
+      differingFields.push(field);
+      const radioName = `${radioGroupPrefix}-${field}`;
+      row.className = "sync-diff-row-changed";
+      row.innerHTML = `
+        <td>${field}</td>
+        <td><label><input type="radio" name="${radioName}" value="local" checked> ${syncFormatValue(lv)}</label></td>
+        <td><label><input type="radio" name="${radioName}" value="server"> ${syncFormatValue(sv)}</label></td>
+      `;
+    }
+    table.appendChild(row);
+  }
+  box.appendChild(table);
+
+  const applyBtn = document.createElement("button");
+  applyBtn.type = "button";
+  applyBtn.textContent = "Zastosuj wybor";
+  applyBtn.addEventListener("click", () => {
+    const fieldChoices = {};
+    for (const field of differingFields) {
+      const checked = box.querySelector(`input[name="${radioGroupPrefix}-${field}"]:checked`);
+      fieldChoices[field] = checked ? checked.value : "local";
+    }
+    syncResolveConflictFields(c.key, fieldChoices);
+  });
+  box.appendChild(applyBtn);
+
+  return box;
+}
+
 // --- Pobieranie zmian z serwera (od innych urzadzen) ---
 
 // Podczas dlugotrwalego pobierania (duzo planow/zdjec przy pierwszej
@@ -562,27 +678,7 @@ async function syncRenderStatus() {
     conflictsTitle.textContent = `Konflikty do przejrzenia (${conflicts.length})`;
     conflictsList.innerHTML = "";
     for (const c of conflicts) {
-      const box = document.createElement("div");
-      box.className = "sync-conflict-item";
-      const localNote = c.localData ? c.localData.note || "(brak notatki)" : "(usunięte lokalnie)";
-      const serverNote = c.serverDeleted ? "(usunięte na innym urządzeniu)" : (c.serverData && c.serverData.note) || "(brak notatki)";
-      box.innerHTML = `
-        <p><strong>${c.type}</strong> — ${c.buildingCode || ""}</p>
-        <p>Twoja wersja: ${localNote}</p>
-        <p>Wersja z serwera: ${serverNote}</p>
-      `;
-      const keepLocalBtn = document.createElement("button");
-      keepLocalBtn.type = "button";
-      keepLocalBtn.textContent = "Zachowaj moje";
-      keepLocalBtn.addEventListener("click", () => syncResolveConflict(c.key, "local"));
-      const keepServerBtn = document.createElement("button");
-      keepServerBtn.type = "button";
-      keepServerBtn.className = "secondary";
-      keepServerBtn.textContent = "Zachowaj z serwera";
-      keepServerBtn.addEventListener("click", () => syncResolveConflict(c.key, "server"));
-      box.appendChild(keepLocalBtn);
-      box.appendChild(keepServerBtn);
-      conflictsList.appendChild(box);
+      conflictsList.appendChild(syncBuildConflictBox(c));
     }
   } else {
     conflictsSection.classList.add("hidden");

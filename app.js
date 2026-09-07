@@ -373,6 +373,7 @@ const fullReportBtn = document.getElementById("full-report-btn");
 const workReportBtn = document.getElementById("work-report-btn");
 const reportBtn = document.getElementById("report-btn");
 const calibrateBtn = document.getElementById("calibrate-btn");
+const locateBtn = document.getElementById("locate-btn");
 const symbolPaletteToggle = document.getElementById("symbol-palette-toggle");
 const symbolPaletteList = document.getElementById("symbol-palette-list");
 const paletteCurrentLabel = document.getElementById("palette-current-label");
@@ -752,7 +753,11 @@ async function loadPlans(buildingCode, preferredFile) {
     planSelect.appendChild(opt);
   }
   if (building.plans.length) {
-    const chosen = (preferredFile && building.plans.find((p) => p.file === preferredFile)) || building.plans[0];
+    // Bez jawnie podanego pliku: wroc na kondygnacje, na ktorej ostatnio
+    // bylismy w TYM budynku (przydatne przy przeskakiwaniu miedzy budynkami,
+    // np. przez podpowiedz GPS) - zamiast zawsze wracac na pierwszy plan.
+    const remembered = preferredFile || (await dbGetMeta(`lastPlanFile:${buildingCode}`));
+    const chosen = (remembered && building.plans.find((p) => p.file === remembered)) || building.plans[0];
     planSelect.value = chosen.file;
     await selectPlan(buildingCode, chosen.file, chosen.name);
   }
@@ -790,6 +795,7 @@ async function selectPlan(buildingCode, file, name) {
   currentPlanName = name;
   currentPlanKey = planKeyOf(buildingCode, file);
   await dbSetMeta("lastPlanKey", currentPlanKey);
+  await dbSetMeta(`lastPlanFile:${buildingCode}`, file);
   initMapIfNeeded();
 
   const rec = await dbGetPlanImage(buildingCode, file);
@@ -1771,6 +1777,81 @@ planSelect.addEventListener("change", () => {
 });
 
 reportBtn.addEventListener("click", () => generatePlanReport(currentBuildingCode, currentPlanKey, currentPlanFile, currentPlanName));
+
+// --- Podpowiedz budynku z GPS ---
+// Uzywamy tylko szerokosci/dlugosci (dokladnosc GPS rzedu kilku-kilkunastu
+// metrow wystarcza do rozpoznania BUDYNKU). Wysokosc z GPS celowo pomijamy -
+// blad pomiaru wysokosci to typowo +/-10-30m, wiele razy wiecej niz odstep
+// miedzy pietrami (~3m), wiec nie da sie tak zgadywac kondygnacji. Zamiast
+// tego kondygnacja podpowiada sie sama z pamieci ostatnio uzywanej dla danego
+// budynku (patrz loadPlans/selectPlan).
+let buildingLocations = null;
+async function loadBuildingLocations() {
+  if (buildingLocations) return buildingLocations;
+  try {
+    const res = await fetch("building-locations.json");
+    buildingLocations = res.ok ? await res.json() : {};
+  } catch {
+    buildingLocations = {};
+  }
+  return buildingLocations;
+}
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+const GPS_MATCH_RADIUS_M = 150;
+
+locateBtn.addEventListener("click", async () => {
+  if (!("geolocation" in navigator)) {
+    alert("Ten telefon/przeglądarka nie obsługuje lokalizacji GPS.");
+    return;
+  }
+  const locations = await loadBuildingLocations();
+  if (!Object.keys(locations).length) {
+    alert("Baza współrzędnych budynków jest jeszcze pusta.");
+    return;
+  }
+  locateBtn.disabled = true;
+  const originalLabel = locateBtn.textContent;
+  locateBtn.textContent = "Namierzam…";
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      locateBtn.disabled = false;
+      locateBtn.textContent = originalLabel;
+      const { latitude, longitude } = pos.coords;
+      let best = null;
+      for (const [code, loc] of Object.entries(locations)) {
+        const dist = haversineMeters(latitude, longitude, loc.lat, loc.lon);
+        if (!best || dist < best.dist) best = { code, dist };
+      }
+      if (!best || best.dist > GPS_MATCH_RADIUS_M) {
+        alert("Żaden ze znanych budynków nie jest wystarczająco blisko (albo nie mam jeszcze zapisanych jego współrzędnych).");
+        return;
+      }
+      if (best.code === currentBuildingCode) {
+        alert(`Wygląda na to, że już tu jesteś (${best.code}, ~${Math.round(best.dist)} m).`);
+        return;
+      }
+      if (confirm(`Wygląda na to, że jesteś przy budynku ${best.code} (~${Math.round(best.dist)} m stąd) — przełączyć?`)) {
+        buildingSelect.value = best.code;
+        loadPlans(best.code);
+      }
+    },
+    (err) => {
+      locateBtn.disabled = false;
+      locateBtn.textContent = originalLabel;
+      alert("Nie udało się pobrać lokalizacji: " + err.message);
+    },
+    { enableHighAccuracy: false, timeout: 10000, maximumAge: 30000 }
+  );
+});
 
 // --- Tabs ---
 document.querySelectorAll(".tab-btn").forEach((btn) => {

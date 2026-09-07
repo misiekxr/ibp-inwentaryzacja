@@ -1,0 +1,7 @@
+{
+  "A1": { "lat": 51.1105463, "lon": 17.0634027, "address": "ul. Marii Curie-Skłodowskiej 42, Wrocław" },
+  "A3": { "lat": 51.1122054, "lon": 17.0646965, "address": "ul. Norwida 31, Wrocław" },
+  "F8": { "lat": 51.0995765, "lon": 17.0953224, "address": "ul. Chełmońskiego 37, Wrocław" },
+  "F13": { "lat": 51.0999219, "lon": 17.0969047, "address": "ul. Chełmońskiego 41, Wrocław" },
+  "F14": { "lat": 51.0998325, "lon": 17.0969765, "address": "ul. Chełmońskiego 39, Wrocław (Centrum Biologii Stosowanej)" }
+}
