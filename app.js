@@ -31,6 +31,7 @@ async function dbAddMarker(marker) {
   if (!marker.id) marker.id = uuidv4();
   const id = await db.add("markers", marker);
   syncEnqueue("marker", id, marker.buildingCode);
+  sampleBuildingLocation(marker.buildingCode);
   return { ...marker, id };
 }
 
@@ -1786,15 +1787,69 @@ reportBtn.addEventListener("click", () => generatePlanReport(currentBuildingCode
 // tego kondygnacja podpowiada sie sama z pamieci ostatnio uzywanej dla danego
 // budynku (patrz loadPlans/selectPlan).
 let buildingLocations = null;
-async function loadBuildingLocations() {
-  if (buildingLocations) return buildingLocations;
+
+// Plik building-locations.json to tylko startowy "bootstrap" (kilka recznie
+// zgeokodowanych adresow) - prawdziwe, coraz dokladniejsze wspolrzedne
+// pochodza z serwera (tabela building_locations, zbierana automatycznie z
+// GPS w terenie - patrz sampleBuildingLocation) i majа pierwszenstwo tam,
+// gdzie juz zebrano choc jedna probke.
+async function loadBuildingLocations(forceRefresh) {
+  if (buildingLocations && !forceRefresh) return buildingLocations;
+  let merged = {};
   try {
     const res = await fetch("building-locations.json");
-    buildingLocations = res.ok ? await res.json() : {};
+    merged = res.ok ? await res.json() : {};
   } catch {
-    buildingLocations = {};
+    merged = {};
   }
+
+  const cfg = await syncGetConfig();
+  if (syncIsLoggedIn(cfg)) {
+    try {
+      const res = await fetch(`${cfg.serverUrl}/api/building-locations`, {
+        headers: { Authorization: `Bearer ${cfg.token}` },
+      });
+      if (res.ok) {
+        const body = await res.json();
+        for (const item of body.items) {
+          merged[item.building_code] = {
+            lat: item.lat,
+            lon: item.lon,
+            address: merged[item.building_code] && merged[item.building_code].address,
+            samples: item.samples,
+          };
+        }
+      }
+    } catch {
+      // offline - zostajemy przy tym co jest w pliku statycznym
+    }
+  }
+
+  buildingLocations = merged;
   return buildingLocations;
+}
+
+// Wywolywane przy kazdym nowym punkcie - probkuje GPS i wysyla je jako
+// kolejna probke lokalizacji tego budynku (srednia biegnaca po stronie
+// serwera). Celowo ciche - to tylko poprawa podpowiedzi GPS w tle, nie akcja
+// uzytkownika, wiec zaden blad/brak zgody nie powinien pokazywac alertu ani
+// przeszkadzac w zapisie punktu (ktory juz i tak sie zapisal lokalnie).
+function sampleBuildingLocation(buildingCode) {
+  if (!("geolocation" in navigator) || !buildingCode) return;
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      syncGetConfig().then((cfg) => {
+        if (!syncIsLoggedIn(cfg)) return;
+        fetch(`${cfg.serverUrl}/api/building-locations`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.token}` },
+          body: JSON.stringify({ building_code: buildingCode, lat: pos.coords.latitude, lon: pos.coords.longitude }),
+        }).catch(() => {});
+      });
+    },
+    () => {},
+    { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }
+  );
 }
 
 function haversineMeters(lat1, lon1, lat2, lon2) {
@@ -1813,7 +1868,7 @@ locateBtn.addEventListener("click", async () => {
     alert("Ten telefon/przeglądarka nie obsługuje lokalizacji GPS.");
     return;
   }
-  const locations = await loadBuildingLocations();
+  const locations = await loadBuildingLocations(true);
   if (!Object.keys(locations).length) {
     alert("Baza współrzędnych budynków jest jeszcze pusta.");
     return;
