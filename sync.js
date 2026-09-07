@@ -180,6 +180,17 @@ async function syncEnqueuePhoto(markerId, photoId) {
   syncTryFlush();
 }
 
+// Plany budynkow (importPlansInput / "Dodaj plan" / przywracanie z kopii) -
+// wywolywane jawnie z tych trzech miejsc w app.js, NIE z samego
+// dbPutPlanImage/dbPutPlanImagePreserveScale, bo te funkcje sa uzywane tez
+// przy zapisie planu POBRANEGO z serwera (syncFetchAndStorePlan) - gdyby
+// enqueue siedzial w nich, kazdy pobrany plan bylby zaraz odsylany z powrotem.
+async function syncEnqueuePlan(planKey) {
+  const db = await dbPromise;
+  await db.put("syncQueue", { key: `plan:${planKey}`, type: "plan", id: planKey });
+  syncTryFlush();
+}
+
 let syncFlushInFlight = false;
 let syncFlushQueued = false;
 
@@ -197,6 +208,7 @@ async function syncTryFlush() {
     for (const item of items) {
       try {
         if (item.type === "photo") await syncPushPhoto(cfg, item);
+        else if (item.type === "plan") await syncPushPlan(cfg, item);
         else await syncPushRecord(cfg, item);
       } catch {
         // brak sieci/blad - zostaw w kolejce, sprobujemy przy kolejnej okazji
@@ -296,6 +308,30 @@ async function syncPushPhoto(cfg, item) {
   await db.delete("syncQueue", item.key);
 }
 
+async function syncPushPlan(cfg, item) {
+  const db = await dbPromise;
+  const plan = await db.get("planImages", item.id);
+  if (!plan) {
+    await db.delete("syncQueue", item.key);
+    return;
+  }
+
+  const form = new FormData();
+  form.append("building_code", plan.buildingCode);
+  form.append("name", plan.name);
+  form.append("sort_order", String(plan.sortOrder || 0));
+  form.append("file_key", plan.file);
+  form.append("file", plan.blob, `plan.${(plan.blob.type || "image/png").split("/")[1] || "png"}`);
+
+  const res = await fetch(`${cfg.serverUrl}/api/plans`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${cfg.token}` },
+    body: form,
+  });
+  if (!res.ok) return; // zostaw w kolejce
+  await db.delete("syncQueue", item.key);
+}
+
 // --- Konflikty ---
 
 async function syncStoreConflict(type, id, buildingCode, localData, serverData, serverUpdatedAt, serverDeleted) {
@@ -342,11 +378,20 @@ async function syncResolveConflict(key, choice) {
 
 // --- Pobieranie zmian z serwera (od innych urzadzen) ---
 
+// Podczas dlugotrwalego pobierania (duzo planow/zdjec przy pierwszej
+// synchronizacji) pokazujemy co sie dzieje - inaczej wyglada to jak
+// zawieszona apka (tak wlasnie wygladalo, zanim to dodalismy).
+function syncSetProgress(text) {
+  const el = document.getElementById("sync-status-info");
+  if (el) el.textContent = text;
+}
+
 async function syncPull() {
   const cfg = await syncGetConfig();
   if (!syncIsLoggedIn(cfg)) return;
   try {
     await syncPullRecords(cfg);
+    await syncPullPlans(cfg);
     await syncPullPhotosMeta(cfg);
   } catch {
     // brak sieci - sprobujemy przy kolejnej okazji
@@ -397,10 +442,56 @@ async function syncApplyRemoteRecord(item) {
   await db.put(store, record);
 }
 
+async function syncPullPlans(cfg) {
+  const db = await dbPromise;
+  let since = (await dbGetMeta("syncPlansCursor")) || "1970-01-01 00:00:00.000000";
+  let hasMore = true;
+  let done = 0;
+  while (hasMore) {
+    const res = await fetch(`${cfg.serverUrl}/api/plans?since=${encodeURIComponent(since)}&limit=50`, {
+      headers: { Authorization: `Bearer ${cfg.token}` },
+    });
+    if (!res.ok) return;
+    const body = await res.json();
+    for (const p of body.items) {
+      if (!p.deleted && p.file_key) {
+        done++;
+        syncSetProgress(`Pobieram plany budynków… (${done})`);
+        await syncFetchAndStorePlan(cfg, p);
+      }
+    }
+    since = body.next_since;
+    hasMore = body.has_more;
+    await dbSetMeta("syncPlansCursor", since);
+  }
+  if (typeof loadBuildings === "function") await loadBuildings();
+}
+
+async function syncFetchAndStorePlan(cfg, p) {
+  const db = await dbPromise;
+  const key = planKeyOf(p.building_code, p.file_key);
+  const existing = await db.get("planImages", key);
+  if (existing) return; // juz mamy ten plan lokalnie pod tym samym kluczem
+
+  const res = await fetch(`${cfg.serverUrl}/api/plans/${p.id}/image`, { headers: { Authorization: `Bearer ${cfg.token}` } });
+  if (!res.ok) return;
+  const blob = await res.blob();
+  await dbPutPlanImagePreserveScale({
+    key,
+    buildingCode: p.building_code,
+    buildingName: p.building_code,
+    file: p.file_key,
+    name: p.name,
+    sortOrder: p.sort_order,
+    blob,
+  });
+}
+
 async function syncPullPhotosMeta(cfg) {
   const db = await dbPromise;
   let since = (await dbGetMeta("syncPhotosCursor")) || "1970-01-01 00:00:00.000000";
   let hasMore = true;
+  let done = 0;
   while (hasMore) {
     const res = await fetch(`${cfg.serverUrl}/api/photos?since=${encodeURIComponent(since)}&limit=100`, {
       headers: { Authorization: `Bearer ${cfg.token}` },
@@ -408,7 +499,11 @@ async function syncPullPhotosMeta(cfg) {
     if (!res.ok) return;
     const body = await res.json();
     for (const p of body.items) {
-      if (!p.deleted) await syncFetchAndAttachPhoto(cfg, p);
+      if (!p.deleted) {
+        done++;
+        syncSetProgress(`Pobieram zdjęcia… (${done})`);
+        await syncFetchAndAttachPhoto(cfg, p);
+      }
     }
     since = body.next_since;
     hasMore = body.has_more;

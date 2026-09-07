@@ -2214,8 +2214,9 @@ async function importBackupPayload(parsed) {
   let plansImported = 0;
   for (const r of planRecords) {
     const blob = dataUrlToBlob(r.image);
+    const planKey = planKeyOf(r.buildingCode, r.file);
     await dbPutPlanImagePreserveScale({
-      key: planKeyOf(r.buildingCode, r.file),
+      key: planKey,
       buildingCode: r.buildingCode,
       buildingName: r.buildingName || r.buildingCode,
       file: r.file,
@@ -2223,6 +2224,7 @@ async function importBackupPayload(parsed) {
       sortOrder: r.sortOrder || 0,
       blob,
     });
+    syncEnqueuePlan(planKey);
     plansImported++;
   }
 
@@ -2415,8 +2417,9 @@ importPlansInput.addEventListener("change", async () => {
         const records = JSON.parse(text);
         for (const r of records) {
           const blob = dataUrlToBlob(r.image);
+          const planKey = planKeyOf(r.buildingCode, r.file);
           await dbPutPlanImagePreserveScale({
-            key: planKeyOf(r.buildingCode, r.file),
+            key: planKey,
             buildingCode: r.buildingCode,
             buildingName: r.buildingName || r.buildingCode,
             file: r.file,
@@ -2424,6 +2427,7 @@ importPlansInput.addEventListener("change", async () => {
             sortOrder: r.sortOrder || 0,
             blob,
           });
+          syncEnqueuePlan(planKey);
         }
         results.push({ name: file.name, ok: true, count: records.length });
       } catch (err) {
@@ -2632,8 +2636,9 @@ planAddSubmitBtn.addEventListener("click", async () => {
 
   planAddSubmitBtn.disabled = true;
   try {
+    const planKey = planKeyOf(code, fileName);
     await dbPutPlanImagePreserveScale({
-      key: planKeyOf(code, fileName),
+      key: planKey,
       buildingCode: code,
       buildingName,
       file: fileName,
@@ -2641,6 +2646,7 @@ planAddSubmitBtn.addEventListener("click", async () => {
       sortOrder,
       blob: pendingPlanBlob,
     });
+    syncEnqueuePlan(planKey);
 
     await loadBuildings();
     planAddStatus.textContent = `Dodano „${planName}” do budynku ${code}.`;
