@@ -1,9 +1,10 @@
-const CACHE_VERSION = "ibp-v20";
+const CACHE_VERSION = "ibp-v22";
 
 const CORE_FILES = [
   "./",
   "index.html",
   "style.css",
+  "sync.js",
   "app.js",
   "manifest.json",
   "vendor/leaflet.js",

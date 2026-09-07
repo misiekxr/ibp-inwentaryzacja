@@ -43,6 +43,13 @@
     </div>
     <div id="map"></div>
     <div id="symbol-palette" class="symbol-palette">
+      <label class="palette-layer-select">Warstwa
+        <select id="placement-layer">
+          <option value="inventory">Inwentaryzacja IBP</option>
+          <option value="delivery">DOSTAWY / poprawki</option>
+          <option value="renovation">Nadzór nad remontem</option>
+        </select>
+      </label>
       <button type="button" id="symbol-palette-toggle" class="palette-toggle" title="Wybierz co stawiać na mapie po dotknięciu">
         Stawiam: <span id="palette-current-label">Punkt</span>
       </button>
@@ -54,6 +61,13 @@
     </div>
     <div id="marker-panel" class="hidden">
       <h3 id="marker-panel-title">Punkt</h3>
+      <label>Warstwa pracy
+        <select id="marker-layer">
+          <option value="inventory">Inwentaryzacja IBP</option>
+          <option value="delivery">DOSTAWY / poprawki</option>
+          <option value="renovation">Nadzór nad remontem</option>
+        </select>
+      </label>
       <label class="status-toggle">
         <input type="checkbox" id="marker-done">
         Załatwione
@@ -71,6 +85,12 @@
       </div>
       <label>Uwagi
         <textarea id="marker-note" rows="4" placeholder="Opis, uwagi..."></textarea>
+      </label>
+      <label>Termin wykonania
+        <input type="date" id="marker-due-date">
+      </label>
+      <label>Data ponownej weryfikacji
+        <input type="date" id="marker-review-date">
       </label>
       <div class="photo-add-row">
         <label class="photo-add-btn">Zrób zdjęcie
@@ -131,6 +151,14 @@
           <option value="done">Załatwione</option>
         </select>
       </label>
+      <label>Warstwa:
+        <select id="inventory-layer-filter">
+          <option value="">Wszystkie</option>
+          <option value="inventory">Inwentaryzacja IBP</option>
+          <option value="delivery">DOSTAWY / poprawki</option>
+          <option value="renovation">Nadzór nad remontem</option>
+        </select>
+      </label>
       <label>Kategoria:
         <select id="inventory-category-filter">
           <option value="">Wszystkie</option>
@@ -138,6 +166,7 @@
       </label>
       <a id="export-csv-link" href="#">Eksportuj CSV</a>
       <button id="full-report-btn" class="secondary" type="button">Raport zbiorczy PDF (czujki + ochrona)</button>
+      <button id="work-report-btn" type="button">Draft raportu zadań</button>
     </div>
     <table id="inventory-table">
       <thead>
@@ -146,8 +175,10 @@
           <th>Budynek</th>
           <th>Plan</th>
           <th>Status</th>
+          <th>Warstwa</th>
           <th>Kategoria</th>
           <th>Uwagi</th>
+          <th>Terminy</th>
           <th>Zdjęcie</th>
           <th>Utworzono</th>
           <th></th>
@@ -243,6 +274,45 @@
     </div>
 
     <div class="backup-panel">
+      <h2>Raport zadań</h2>
+      <p>Wpisz adresy odbiorców. Raport PDF zostanie pobrany, a aplikacja przygotuje wiadomość e-mail.</p>
+      <label>Adresy e-mail (oddziel przecinkami)
+        <input type="text" id="report-emails" placeholder="np. ochrona@firma.pl, zarzadca@firma.pl">
+      </label>
+      <button id="save-report-settings-btn" type="button" class="secondary">Zapisz odbiorców</button>
+    </div>
+
+    <div class="backup-panel">
+      <h2>Synchronizacja z serwerem</h2>
+      <p id="sync-status-info">Status: niezalogowany</p>
+
+      <div id="sync-login-section">
+        <label>Adres serwera
+          <input type="text" id="sync-server-url" value="https://ppoz.gteam.pl/api">
+        </label>
+        <label>E-mail
+          <input type="email" id="sync-email" autocomplete="username">
+        </label>
+        <label>Hasło
+          <input type="password" id="sync-password" autocomplete="current-password">
+        </label>
+        <button id="sync-login-btn" type="button">Zaloguj i włącz synchronizację</button>
+      </div>
+
+      <div id="sync-active-section" class="hidden">
+        <p id="sync-pending-info"></p>
+        <button id="sync-now-btn" type="button" class="secondary">Synchronizuj teraz</button>
+        <button id="sync-logout-btn" type="button" class="secondary">Wyłącz synchronizację</button>
+      </div>
+
+      <div id="sync-conflicts-section" class="hidden">
+        <hr>
+        <h3 id="sync-conflicts-title">Konflikty do przejrzenia</h3>
+        <div id="sync-conflicts-list"></div>
+      </div>
+    </div>
+
+    <div class="backup-panel">
       <h2>Kopia zapasowa danych</h2>
       <p>
         Wszystkie dane (punkty, notatki, zdjęcia, wczytane plany budynków) są zapisane tylko na
@@ -305,6 +375,7 @@
   pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdf.worker.min.mjs";
   window.pdfjsLib = pdfjsLib;
 </script>
+<script src="sync.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 const { openDB } = idb;
 
-const dbPromise = openDB("ibp-db", 3, {
+const dbPromise = openDB("ibp-db", 4, {
   upgrade(db, oldVersion) {
     if (oldVersion < 1) {
       const markers = db.createObjectStore("markers", { keyPath: "id", autoIncrement: true });
@@ -17,12 +17,20 @@ const dbPromise = openDB("ibp-db", 3, {
       const measurements = db.createObjectStore("measurements", { keyPath: "id", autoIncrement: true });
       measurements.createIndex("by-building", "buildingCode");
     }
+    if (oldVersion < 4) {
+      // Kolejka wysylki do serwera (przetrwa restart appki/utrate polaczenia)
+      // i lista wykrytych konfliktow do recznego przejrzenia - patrz sync.js.
+      db.createObjectStore("syncQueue", { keyPath: "key" });
+      db.createObjectStore("syncConflicts", { keyPath: "key" });
+    }
   },
 });
 
 async function dbAddMarker(marker) {
   const db = await dbPromise;
+  if (!marker.id) marker.id = uuidv4();
   const id = await db.add("markers", marker);
+  syncEnqueue("marker", id, marker.buildingCode);
   return { ...marker, id };
 }
 
@@ -34,12 +42,15 @@ async function dbUpdateMarker(id, changes) {
   const updated = { ...existing, ...changes };
   await tx.store.put(updated);
   await tx.done;
+  syncEnqueue("marker", id, updated.buildingCode);
   return updated;
 }
 
 async function dbDeleteMarker(id) {
   const db = await dbPromise;
+  const existing = await db.get("markers", id);
   await db.delete("markers", id);
+  if (existing) syncEnqueueDelete("marker", id, existing.buildingCode, existing._syncUpdatedAt || null);
 }
 
 async function dbAddPhotoToMarker(id, blob, type) {
@@ -47,10 +58,13 @@ async function dbAddPhotoToMarker(id, blob, type) {
   const tx = db.transaction("markers", "readwrite");
   const existing = await tx.store.get(id);
   if (!existing) return null;
-  const photos = [...(existing.photos || []), { blob, type, addedAt: new Date().toISOString() }];
+  const photoEntry = { id: uuidv4(), blob, type, addedAt: new Date().toISOString(), synced: false };
+  const photos = [...(existing.photos || []), photoEntry];
   const updated = { ...existing, photos, updatedAt: new Date().toISOString() };
   await tx.store.put(updated);
   await tx.done;
+  syncEnqueue("marker", id, updated.buildingCode);
+  syncEnqueuePhoto(id, photoEntry.id);
   return updated;
 }
 
@@ -63,6 +77,7 @@ async function dbRemovePhotoFromMarker(id, photoIndex) {
   const updated = { ...existing, photos, updatedAt: new Date().toISOString() };
   await tx.store.put(updated);
   await tx.done;
+  syncEnqueue("marker", id, updated.buildingCode);
   return updated;
 }
 
@@ -114,7 +129,9 @@ async function dbGetAllPlanImages() {
 
 async function dbAddSymbolType(type) {
   const db = await dbPromise;
+  if (!type.id) type.id = uuidv4();
   const id = await db.add("symbolTypes", type);
+  if (!type.builtin) syncEnqueue("symbolType", id, null);
   return { ...type, id };
 }
 
@@ -125,12 +142,16 @@ async function dbGetAllSymbolTypes() {
 
 async function dbDeleteSymbolType(id) {
   const db = await dbPromise;
+  const existing = await db.get("symbolTypes", id);
   await db.delete("symbolTypes", id);
+  if (existing && !existing.builtin) syncEnqueueDelete("symbolType", id, null, existing._syncUpdatedAt || null);
 }
 
 async function dbAddMeasurement(measurement) {
   const db = await dbPromise;
+  if (!measurement.id) measurement.id = uuidv4();
   const id = await db.add("measurements", measurement);
+  syncEnqueue("measurement", id, measurement.buildingCode);
   return { ...measurement, id };
 }
 
@@ -142,12 +163,15 @@ async function dbUpdateMeasurement(id, changes) {
   const updated = { ...existing, ...changes };
   await tx.store.put(updated);
   await tx.done;
+  syncEnqueue("measurement", id, updated.buildingCode);
   return updated;
 }
 
 async function dbDeleteMeasurement(id) {
   const db = await dbPromise;
+  const existing = await db.get("measurements", id);
   await db.delete("measurements", id);
+  if (existing) syncEnqueueDelete("measurement", id, existing.buildingCode, existing._syncUpdatedAt || null);
 }
 
 async function dbGetAllMeasurements() {
@@ -342,19 +366,25 @@ const planSelect = document.getElementById("plan-select");
 const inventoryBuildingFilter = document.getElementById("inventory-building-filter");
 const inventoryPlanFilter = document.getElementById("inventory-plan-filter");
 const inventoryStatusFilter = document.getElementById("inventory-status-filter");
+const inventoryLayerFilter = document.getElementById("inventory-layer-filter");
 const inventoryCategoryFilter = document.getElementById("inventory-category-filter");
 const exportCsvLink = document.getElementById("export-csv-link");
 const fullReportBtn = document.getElementById("full-report-btn");
+const workReportBtn = document.getElementById("work-report-btn");
 const reportBtn = document.getElementById("report-btn");
 const calibrateBtn = document.getElementById("calibrate-btn");
 const symbolPaletteToggle = document.getElementById("symbol-palette-toggle");
 const symbolPaletteList = document.getElementById("symbol-palette-list");
 const paletteCurrentLabel = document.getElementById("palette-current-label");
+const placementLayer = document.getElementById("placement-layer");
 const backupBanner = document.getElementById("backup-banner");
 
 const markerPanel = document.getElementById("marker-panel");
 const markerPanelTitle = document.getElementById("marker-panel-title");
 const markerDone = document.getElementById("marker-done");
+const markerLayer = document.getElementById("marker-layer");
+const markerDueDate = document.getElementById("marker-due-date");
+const markerReviewDate = document.getElementById("marker-review-date");
 const markerCategory = document.getElementById("marker-category");
 const markerCategoryCustom = document.getElementById("marker-category-custom");
 const manageCategoriesBtn = document.getElementById("manage-categories-btn");
@@ -378,6 +408,8 @@ const deviceLabelInput = document.getElementById("device-label-input");
 const backupDirSection = document.getElementById("backup-dir-section");
 const backupDirInfo = document.getElementById("backup-dir-info");
 const connectBackupDirBtn = document.getElementById("connect-backup-dir-btn");
+const reportEmails = document.getElementById("report-emails");
+const saveReportSettingsBtn = document.getElementById("save-report-settings-btn");
 
 const importPlansInput = document.getElementById("import-plans-input");
 const buildingsLoadedInfo = document.getElementById("buildings-loaded-info");
@@ -503,6 +535,16 @@ const DEFAULT_CATEGORIES = [
   "Aktualizacja planów IBP",
   "DOSTAWA",
 ];
+
+const LAYER_LABELS = {
+  inventory: "Inwentaryzacja IBP",
+  delivery: "DOSTAWY / poprawki",
+  renovation: "Nadzór nad remontem",
+};
+
+function layerLabel(layer) {
+  return LAYER_LABELS[layer] || LAYER_LABELS.inventory;
+}
 
 // Lista kategorii = kategorie domyslne (pomniejszone o usuniete przez uzytkownika,
 // patrz deleteCategory) + wszystkie juz uzyte w bazie (np. wpisane recznie przez
@@ -994,6 +1036,9 @@ async function onMapClick(e) {
     y: e.latlng.lat,
     note: "",
     category: "",
+    layer: placementLayer.value || "inventory",
+    dueDate: "",
+    reviewDate: "",
     photos: [],
     done: false,
     symbolTypeId: placementMode,
@@ -1408,6 +1453,9 @@ async function openMarkerPanel(m) {
   const symbolType = m.symbolTypeId != null ? symbolTypesData.find((t) => t.id === m.symbolTypeId) : null;
   markerPanelTitle.textContent = symbolType ? `${symbolType.name} #${m.id}` : `Punkt #${m.id}`;
   markerDone.checked = !!m.done;
+  markerLayer.value = m.layer || "inventory";
+  markerDueDate.value = m.dueDate || "";
+  markerReviewDate.value = m.reviewDate || "";
   await populateCategorySelect(m.category || "");
   categoryManageList.classList.add("hidden");
   symbolRotateRow.classList.toggle("hidden", !symbolType);
@@ -1477,6 +1525,20 @@ markerDone.addEventListener("change", async () => {
     await loadInventory();
   }
 });
+
+async function saveMarkerField(field, value) {
+  if (editingMarkerId == null) return;
+  const updated = await dbUpdateMarker(editingMarkerId, { [field]: value, updatedAt: new Date().toISOString() });
+  if (updated) {
+    refreshLeafletMarker(updated);
+    await loadInventory();
+    setSaveStatus("Zapisano", false);
+  }
+}
+
+markerLayer.addEventListener("change", () => saveMarkerField("layer", markerLayer.value));
+markerDueDate.addEventListener("change", () => saveMarkerField("dueDate", markerDueDate.value));
+markerReviewDate.addEventListener("change", () => saveMarkerField("reviewDate", markerReviewDate.value));
 
 markerCategory.addEventListener("change", async () => {
   if (editingMarkerId == null) return;
@@ -1813,6 +1875,7 @@ inventoryBuildingFilter.addEventListener("change", () => {
 });
 inventoryPlanFilter.addEventListener("change", loadInventory);
 inventoryStatusFilter.addEventListener("change", loadInventory);
+inventoryLayerFilter.addEventListener("change", loadInventory);
 inventoryCategoryFilter.addEventListener("change", loadInventory);
 
 function populateInventoryBuildingFilter() {
@@ -1865,6 +1928,7 @@ async function loadInventory() {
   const buildingFilter = inventoryBuildingFilter.value;
   const planKey = inventoryPlanFilter.value;
   const statusFilter = inventoryStatusFilter.value;
+  const layerFilter = inventoryLayerFilter.value;
   const categoryFilter = inventoryCategoryFilter.value;
   let markers;
   if (planKey) markers = await dbGetMarkersByPlan(planKey);
@@ -1872,6 +1936,7 @@ async function loadInventory() {
   else markers = await dbGetAllMarkers();
   if (statusFilter === "open") markers = markers.filter((m) => !m.done);
   if (statusFilter === "done") markers = markers.filter((m) => !!m.done);
+  if (layerFilter) markers = markers.filter((m) => (m.layer || "inventory") === layerFilter);
   if (categoryFilter) markers = markers.filter((m) => m.category === categoryFilter);
   markers.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
 
@@ -1890,8 +1955,10 @@ async function loadInventory() {
       <td>${m.buildingCode}</td>
       <td>${m.planName}</td>
       <td>${statusCell}</td>
+      <td>${layerLabel(m.layer)}</td>
       <td>${(m.category || "").replace(/</g, "&lt;")}</td>
       <td>${(m.note || "").replace(/</g, "&lt;")}</td>
+      <td>${m.dueDate || ""}${m.reviewDate ? ` / kontrola: ${m.reviewDate}` : ""}</td>
       <td>${photoCell}</td>
       <td>${(m.createdAt || "").replace("T", " ").slice(0, 19)}</td>
       <td class="row-actions"><a data-id="${m.id}" data-plan="${m.planFile}">Pokaż na mapie</a></td>
@@ -1942,14 +2009,14 @@ function downloadBlob(blob, filename) {
 async function exportCsv(buildingCode) {
   const markers = buildingCode ? await dbGetMarkersByBuilding(buildingCode) : await dbGetAllMarkers();
   markers.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
-  const header = ["Budynek", "Plan", "Typ", "Status", "Kategoria", "Uwagi", "X", "Y", "Utworzono", "Zaktualizowano"];
+  const header = ["Budynek", "Plan", "Typ", "Warstwa", "Status", "Kategoria", "Uwagi", "Termin", "Weryfikacja", "X", "Y", "Utworzono", "Zaktualizowano"];
   const lines = [header.map(csvEscape).join(";")];
   for (const m of markers) {
     const status = m.done ? "Załatwione" : "Do zrobienia";
     const symbolType = m.symbolTypeId != null ? symbolTypesData.find((t) => t.id === m.symbolTypeId) : null;
     const typeName = symbolType ? symbolType.name : "Punkt";
     lines.push(
-      [m.buildingCode, m.planName, typeName, status, m.category || "", m.note, m.x, m.y, m.createdAt, m.updatedAt]
+      [m.buildingCode, m.planName, typeName, layerLabel(m.layer), status, m.category || "", m.note, m.dueDate || "", m.reviewDate || "", m.x, m.y, m.createdAt, m.updatedAt]
         .map(csvEscape)
         .join(";")
     );
@@ -2052,6 +2119,9 @@ async function buildBackupPayload() {
       note: m.note,
       category: m.category || "",
       done: !!m.done,
+      layer: m.layer || "inventory",
+      dueDate: m.dueDate || "",
+      reviewDate: m.reviewDate || "",
       photos,
       createdAt: m.createdAt,
       updatedAt: m.updatedAt,
@@ -2083,10 +2153,12 @@ async function buildBackupPayload() {
   }));
 
   const device = (await dbGetMeta("deviceLabel")) || guessDeviceLabel();
+  const reportEmails = (await dbGetMeta("reportEmails")) || "";
   return {
     version: 2,
     exportedAt: new Date().toISOString(),
     device,
+    reportEmails,
     markers: markerOut,
     planImages: planOut,
     measurements: measurementOut,
@@ -2102,6 +2174,7 @@ async function importBackupPayload(parsed) {
   const records = Array.isArray(parsed) ? parsed : parsed.markers || [];
   const planRecords = Array.isArray(parsed) ? [] : parsed.planImages || [];
   const measurementRecords = Array.isArray(parsed) ? [] : parsed.measurements || [];
+  if (!Array.isArray(parsed) && parsed.reportEmails) await dbSetMeta("reportEmails", parsed.reportEmails);
 
   const existing = await dbGetAllMarkers();
   const existingKeys = new Set(existing.map((m) => `${m.buildingCode}::${m.planFile}::${m.createdAt}`));
@@ -2126,6 +2199,9 @@ async function importBackupPayload(parsed) {
       y: r.y,
       note: r.note || "",
       category: r.category || "",
+      layer: r.layer || "inventory",
+      dueDate: r.dueDate || "",
+      reviewDate: r.reviewDate || "",
       done: !!r.done,
       photos,
       createdAt: r.createdAt || new Date().toISOString(),
@@ -2589,6 +2665,12 @@ planAddFile.addEventListener("change", async () => {
   if (file) await prepareNewPlanFile(file);
 });
 
+planAddFile.addEventListener("change", async () => {
+  const file = planAddFile.files[0];
+  planAddFile.value = "";
+  if (file) await prepareNewPlanFile(file);
+});
+
 // --- Raport PDF: mapka z ponumerowanymi punktami + legenda notatek ---
 const BRAND = [120, 40, 52]; // Pantone 202C - System Identyfikacji Wizualnej UPWr
 const REPORT_CATEGORIES = [
@@ -2882,6 +2964,65 @@ async function generateFullReport() {
 
 fullReportBtn.addEventListener("click", generateFullReport);
 
+async function generateWorkReport() {
+  const markers = (await dbGetAllMarkers()).filter((m) => !m.done);
+  if (!markers.length) {
+    alert("Nie ma otwartych zadań do raportu.");
+    return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 12;
+  let y = 20;
+  doc.setFillColor(...BRAND);
+  doc.rect(0, 0, pageW, 4, "F");
+  doc.setFont("PTSerif", "bold");
+  doc.setFontSize(15);
+  doc.setTextColor(...BRAND);
+  doc.text("Draft raportu zadań ochrony przeciwpożarowej", margin, y);
+  y += 7;
+  doc.setFont("PTSerif", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(80, 80, 80);
+  doc.text(`Wygenerowano: ${new Date().toLocaleString("pl-PL")} | Liczba otwartych zadań: ${markers.length}`, margin, y);
+  y += 10;
+  doc.setTextColor(20, 20, 20);
+  markers.sort((a, b) => (a.reviewDate || a.dueDate || "9999") .localeCompare(b.reviewDate || b.dueDate || "9999"));
+  for (const m of markers) {
+    const lines = doc.splitTextToSize(
+      `${m.buildingCode} / ${m.planName} — ${layerLabel(m.layer)}\n` +
+      `Kategoria: ${m.category || "(brak)"} | Wykonanie: ${m.dueDate || "brak"} | Weryfikacja: ${m.reviewDate || "brak"}\n` +
+      `${m.note || "Brak opisu"}`,
+      pageW - margin * 2 - 8
+    );
+    if (y + lines.length * 4.5 + 8 > pageH - margin) {
+      doc.addPage();
+      y = margin + 8;
+    }
+    doc.setDrawColor(210, 210, 210);
+    doc.rect(margin, y - 4, pageW - margin * 2, lines.length * 4.5 + 6);
+    doc.setFontSize(9);
+    doc.text(lines, margin + 4, y);
+    y += lines.length * 4.5 + 10;
+  }
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  const filename = `draft-raport-zadan-${dateStamp}.pdf`;
+  doc.save(filename);
+  const recipients = (await dbGetMeta("reportEmails")) || "";
+  const subject = encodeURIComponent(`Draft zadań PPOŻ — ${dateStamp}`);
+  const body = encodeURIComponent(`Dzień dobry,\n\nW załączeniu draft raportu zadań PPOŻ z dnia ${dateStamp}.\n\nLiczba otwartych zadań: ${markers.length}.\n\nRaport został pobrany jako plik PDF i należy go dołączyć do wiadomości.`);
+  window.location.href = `mailto:${encodeURIComponent(recipients)}?subject=${subject}&body=${body}`;
+}
+
+workReportBtn.addEventListener("click", generateWorkReport);
+saveReportSettingsBtn.addEventListener("click", async () => {
+  await dbSetMeta("reportEmails", reportEmails.value.trim());
+  saveReportSettingsBtn.textContent = "Zapisano odbiorców";
+  setTimeout(() => (saveReportSettingsBtn.textContent = "Zapisz odbiorców"), 1800);
+});
+
 // --- Service worker + PWA install ---
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
@@ -2891,11 +3032,16 @@ if ("serviceWorker" in navigator) {
 
 // --- Start ---
 (async function init() {
+  await syncMigrateLegacyIds();
   await loadSymbolTypes();
   renderSymbolPalette();
   await loadBuildings();
   await ensureDeviceLabel();
+  reportEmails.value = (await dbGetMeta("reportEmails")) || "";
   await refreshBackupInfo();
   await refreshBackupDirUI();
   await maybeAutoRestore();
+  syncWireUi();
+  syncTryFlush();
+  syncPull();
 })();

@@ -765,7 +765,9 @@ td.row-actions a {
 .backup-panel p { font-size: 0.85rem; color: var(--muted); }
 .backup-panel hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 
-.backup-panel input[type="text"] {
+.backup-panel input[type="text"],
+.backup-panel input[type="email"],
+.backup-panel input[type="password"] {
   display: block;
   width: 100%;
   box-sizing: border-box;
@@ -780,6 +782,17 @@ td.row-actions a {
   background: var(--panel);
   color: var(--muted);
 }
+
+.backup-panel button { margin-top: 12px; }
+.backup-panel button + button { margin-left: 8px; }
+
+.sync-conflict-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  margin-top: 10px;
+}
+.sync-conflict-item p { margin: 4px 0; }
 
 #plan-add-status:empty { display: none; }
 
