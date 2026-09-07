@@ -42,12 +42,24 @@
       <p>Przejdź do zakładki <strong>Kopia zapasowa</strong> i wczytaj plik planów (np. plany-B1.json).</p>
     </div>
     <div id="map"></div>
+    <div id="map-filter-control" class="map-filter-control">
+      <label>Pokaż na mapie
+        <select id="map-layer-filter">
+          <option value="">Wszystkie warstwy</option>
+          <option value="inventory">Inwentaryzacja IBP</option>
+          <option value="delivery">DOSTAWY / poprawki</option>
+          <option value="renovation">Nadzór nad remontem</option>
+          <option value="security">Ochrona / kontrola nocna</option>
+        </select>
+      </label>
+    </div>
     <div id="symbol-palette" class="symbol-palette">
       <label class="palette-layer-select">Warstwa
         <select id="placement-layer">
           <option value="inventory">Inwentaryzacja IBP</option>
           <option value="delivery">DOSTAWY / poprawki</option>
           <option value="renovation">Nadzór nad remontem</option>
+          <option value="security">Ochrona / kontrola nocna</option>
         </select>
       </label>
       <button type="button" id="symbol-palette-toggle" class="palette-toggle" title="Wybierz co stawiać na mapie po dotknięciu">
@@ -67,6 +79,7 @@
           <option value="inventory">Inwentaryzacja IBP</option>
           <option value="delivery">DOSTAWY / poprawki</option>
           <option value="renovation">Nadzór nad remontem</option>
+          <option value="security">Ochrona / kontrola nocna</option>
         </select>
       </label>
       <label class="status-toggle">
@@ -158,6 +171,7 @@
           <option value="inventory">Inwentaryzacja IBP</option>
           <option value="delivery">DOSTAWY / poprawki</option>
           <option value="renovation">Nadzór nad remontem</option>
+          <option value="security">Ochrona / kontrola nocna</option>
         </select>
       </label>
       <label>Kategoria:

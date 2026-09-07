@@ -162,6 +162,21 @@ main {
   z-index: 900;
 }
 
+.map-filter-control {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 900;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+.map-filter-control label { display: flex; flex-direction: column; gap: 2px; }
+.map-filter-control select { font: inherit; }
+
 .palette-toggle {
   background: var(--panel);
   border: 1px solid var(--border);

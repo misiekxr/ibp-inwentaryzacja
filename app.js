@@ -375,6 +375,7 @@ const workReportBtn = document.getElementById("work-report-btn");
 const reportBtn = document.getElementById("report-btn");
 const calibrateBtn = document.getElementById("calibrate-btn");
 const locateBtn = document.getElementById("locate-btn");
+const mapLayerFilterSelect = document.getElementById("map-layer-filter");
 const symbolPaletteToggle = document.getElementById("symbol-palette-toggle");
 const symbolPaletteList = document.getElementById("symbol-palette-list");
 const paletteCurrentLabel = document.getElementById("palette-current-label");
@@ -542,6 +543,7 @@ const LAYER_LABELS = {
   inventory: "Inwentaryzacja IBP",
   delivery: "DOSTAWY / poprawki",
   renovation: "Nadzór nad remontem",
+  security: "Ochrona / kontrola nocna",
 };
 
 function layerLabel(layer) {
@@ -815,9 +817,27 @@ async function selectPlan(buildingCode, file, name) {
   imageOverlay = L.imageOverlay(url, bounds).addTo(map);
   map.fitBounds(bounds);
 
-  const markers = await dbGetMarkersByPlan(currentPlanKey);
-  for (const m of markers) addLeafletMarker(m);
+  await refreshMapMarkers();
   await renderMeasurementsForPlan(currentPlanKey);
+}
+
+// Filtr widoczności na mapie (nie ma wpływu na dane, tylko na to co się rysuje -
+// np. "pokaż tylko warstwę Ochrona" żeby ochroniarz widział wyłącznie swoje
+// punkty kontrolne, bez reszty inwentaryzacji). Nowo dodany punkt i tak
+// pojawia się od razu, nawet jeśli nie pasuje do aktywnego filtra - inaczej
+// dotknięcie mapy wyglądałoby, jakby nic się nie zapisało.
+let mapLayerFilter = "";
+
+function markerMatchesMapFilter(m) {
+  return !mapLayerFilter || m.layer === mapLayerFilter;
+}
+
+async function refreshMapMarkers() {
+  if (!currentPlanKey) return;
+  for (const id in leafletMarkers) map.removeLayer(leafletMarkers[id]);
+  leafletMarkers = {};
+  const markers = await dbGetMarkersByPlan(currentPlanKey);
+  for (const m of markers) if (markerMatchesMapFilter(m)) addLeafletMarker(m);
 }
 
 function addLeafletMarker(m) {
@@ -1906,6 +1926,11 @@ locateBtn.addEventListener("click", async () => {
     },
     { enableHighAccuracy: false, timeout: 10000, maximumAge: 30000 }
   );
+});
+
+mapLayerFilterSelect.addEventListener("change", () => {
+  mapLayerFilter = mapLayerFilterSelect.value;
+  refreshMapMarkers();
 });
 
 // --- Tabs ---
