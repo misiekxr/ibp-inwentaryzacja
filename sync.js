@@ -210,8 +210,10 @@ async function syncTryFlush() {
         if (item.type === "photo") await syncPushPhoto(cfg, item);
         else if (item.type === "plan") await syncPushPlan(cfg, item);
         else await syncPushRecord(cfg, item);
-      } catch {
-        // brak sieci/blad - zostaw w kolejce, sprobujemy przy kolejnej okazji
+      } catch (err) {
+        // brak sieci/blad - zostaw w kolejce, sprobujemy przy kolejnej okazji,
+        // ale zaloguj zeby dalo sie zdiagnozowac (patrz syncPull - ten sam powod)
+        console.error("[sync] push nie powiodl sie:", item.type, item.id, err);
       }
     }
   } finally {
