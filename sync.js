@@ -504,9 +504,21 @@ function syncSetProgress(text) {
   if (el) el.textContent = text;
 }
 
+// Bez tej blokady kilka wyzwalaczy pull-a (login, powrot online, powrot do
+// karty, timer co 60s) moglo odpalic sie prawie rownoczesnie - kazde
+// wywolanie zaczynaloby od TEGO SAMEGO, jeszcze nie zaawansowanego kursora i
+// ponownie sciagalo ten sam pakiet planow/zdjec w kolko, zamiast tylko raz.
+let syncPullInFlight = false;
+let syncPullQueued = false;
+
 async function syncPull() {
   const cfg = await syncGetConfig();
   if (!syncIsLoggedIn(cfg)) return;
+  if (syncPullInFlight) {
+    syncPullQueued = true;
+    return;
+  }
+  syncPullInFlight = true;
   try {
     await syncPullRecords(cfg);
     await syncPullPlans(cfg);
@@ -517,8 +529,14 @@ async function syncPull() {
     // dalo sie to zdiagnozowac z DevTools zamiast cichego "nic sie nie stalo".
     console.error("[sync] syncPull nie dokonczyl sie:", err);
     syncSetProgress(`Błąd synchronizacji: ${err && err.message ? err.message : err}`);
+  } finally {
+    syncPullInFlight = false;
+    await syncRenderStatus();
+    if (syncPullQueued) {
+      syncPullQueued = false;
+      syncPull();
+    }
   }
-  await syncRenderStatus();
 }
 
 async function syncPullRecords(cfg) {
