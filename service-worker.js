@@ -1,4 +1,4 @@
-const CACHE_VERSION = "ibp-v27";
+const CACHE_VERSION = "ibp-v28";
 
 const CORE_FILES = [
   "./",

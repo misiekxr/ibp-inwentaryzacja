@@ -509,8 +509,12 @@ async function syncPull() {
     await syncPullRecords(cfg);
     await syncPullPlans(cfg);
     await syncPullPhotosMeta(cfg);
-  } catch {
-    // brak sieci - sprobujemy przy kolejnej okazji
+  } catch (err) {
+    // Lapiemy tu zarowno "brak sieci" jak i realne bledy (np. IndexedDB odmawia
+    // zapisu przy przepelnionej przestrzeni dyskowej) - loguj do konsoli, zeby
+    // dalo sie to zdiagnozowac z DevTools zamiast cichego "nic sie nie stalo".
+    console.error("[sync] syncPull nie dokonczyl sie:", err);
+    syncSetProgress(`Błąd synchronizacji: ${err && err.message ? err.message : err}`);
   }
   await syncRenderStatus();
 }
