@@ -374,6 +374,8 @@ const fullReportBtn = document.getElementById("full-report-btn");
 const workReportBtn = document.getElementById("work-report-btn");
 const reportBtn = document.getElementById("report-btn");
 const calibrateBtn = document.getElementById("calibrate-btn");
+const rotateLeftBtn = document.getElementById("rotate-left-btn");
+const rotateRightBtn = document.getElementById("rotate-right-btn");
 const locateBtn = document.getElementById("locate-btn");
 const mapLayerFilterSelect = document.getElementById("map-layer-filter");
 const symbolPaletteToggle = document.getElementById("symbol-palette-toggle");
@@ -719,11 +721,15 @@ async function loadBuildings() {
     emptyState.classList.remove("hidden");
     reportBtn.classList.add("hidden");
     calibrateBtn.classList.add("hidden");
+    rotateLeftBtn.classList.add("hidden");
+    rotateRightBtn.classList.add("hidden");
     return;
   }
   emptyState.classList.add("hidden");
   reportBtn.classList.remove("hidden");
   calibrateBtn.classList.remove("hidden");
+  rotateLeftBtn.classList.remove("hidden");
+  rotateRightBtn.classList.remove("hidden");
 
   // Wracamy do ostatnio uzywanego budynku/kondygnacji (jesli nadal istnieje wsrod
   // wczytanych planow), zeby nie trzeba bylo za kazdym razem wyszukiwac ich od nowa.
@@ -820,6 +826,85 @@ async function selectPlan(buildingCode, file, name) {
   await refreshMapMarkers();
   await renderMeasurementsForPlan(currentPlanKey);
 }
+
+// --- Obracanie planu o 90 stopni ---
+// Fizycznie obraca piksele obrazu (canvas) i PRZELICZA wspolrzedne kazdego
+// markera/punktu pomiaru na tym planie, zeby zostaly we wlasciwych miejscach
+// wzgledem obroconego obrazu - to jedyny sposob, zeby nie rozjechaly sie przy
+// starych, juz zsynchronizowanych danych na innych urzadzeniach (obraca sie
+// "prawda", nie tylko widok).
+async function rotateImageBlob(blob, direction) {
+  const bitmap = await createImageBitmap(blob);
+  const oldW = bitmap.width;
+  const oldH = bitmap.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = oldH;
+  canvas.height = oldW;
+  const ctx = canvas.getContext("2d");
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.rotate(((direction === "cw" ? 90 : -90) * Math.PI) / 180);
+  ctx.drawImage(bitmap, -oldW / 2, -oldH / 2);
+  bitmap.close();
+  const rotatedBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  return { blob: rotatedBlob, oldW, oldH };
+}
+
+// x/y markerow to wspolrzedne Leaflet (lng=x, lat=y) na obrazie o szerokosci
+// oldW i wysokosci oldH - wzory wyprowadzone i sprawdzone na naroznikach dla
+// obu kierunkow, zeby po obrocie punkty trafily we wlasciwe miejsce.
+function rotatePointCoords(x, y, oldW, oldH, direction) {
+  if (direction === "cw") return { x: y, y: oldW - x };
+  return { x: oldH - y, y: x };
+}
+
+async function rotateCurrentPlan(direction) {
+  if (!currentPlanKey || !currentBuildingCode || !currentPlanFile) return;
+  if (
+    !confirm(
+      "Obrócić ten plan o 90°? Wszystkie punkty i pomiary na nim zostaną przesunięte w odpowiadające miejsca (też na innych urządzeniach po synchronizacji)."
+    )
+  ) {
+    return;
+  }
+
+  const rec = await dbGetPlanImage(currentBuildingCode, currentPlanFile);
+  if (!rec) return;
+
+  rotateLeftBtn.disabled = true;
+  rotateRightBtn.disabled = true;
+  try {
+    const { blob: newBlob, oldW, oldH } = await rotateImageBlob(rec.blob, direction);
+
+    await dbPutPlanImage({ ...rec, blob: newBlob });
+    syncEnqueuePlan(currentPlanKey);
+
+    const markers = await dbGetMarkersByPlan(currentPlanKey);
+    for (const m of markers) {
+      const { x, y } = rotatePointCoords(m.x, m.y, oldW, oldH, direction);
+      await dbUpdateMarker(m.id, { x, y });
+    }
+
+    const measurements = await dbGetMeasurementsByBuilding(currentBuildingCode);
+    for (const meas of measurements) {
+      let changed = false;
+      const newPoints = meas.points.map((p) => {
+        if (p.planFile !== currentPlanFile) return p;
+        changed = true;
+        const { x, y } = rotatePointCoords(p.x, p.y, oldW, oldH, direction);
+        return { ...p, x, y };
+      });
+      if (changed) await dbUpdateMeasurement(meas.id, { points: newPoints });
+    }
+
+    await selectPlan(currentBuildingCode, currentPlanFile, currentPlanName);
+  } finally {
+    rotateLeftBtn.disabled = false;
+    rotateRightBtn.disabled = false;
+  }
+}
+
+rotateLeftBtn.addEventListener("click", () => rotateCurrentPlan("ccw"));
+rotateRightBtn.addEventListener("click", () => rotateCurrentPlan("cw"));
 
 // Filtr widoczności na mapie (nie ma wpływu na dane, tylko na to co się rysuje -
 // np. "pokaż tylko warstwę Ochrona" żeby ochroniarz widział wyłącznie swoje
