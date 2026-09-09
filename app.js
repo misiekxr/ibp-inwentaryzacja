@@ -384,6 +384,32 @@ const paletteCurrentLabel = document.getElementById("palette-current-label");
 const placementLayer = document.getElementById("placement-layer");
 const backupBanner = document.getElementById("backup-banner");
 
+const startErrorBanner = document.getElementById("start-error-banner");
+const startErrorText = document.getElementById("start-error-text");
+const startErrorDetails = document.getElementById("start-error-details");
+const startErrorRetryBtn = document.getElementById("start-error-retry");
+const startErrorDetailsToggle = document.getElementById("start-error-details-toggle");
+
+// Uzywane przy bledach krytycznych w init() (patrz nizej) - zamiast pustego
+// ekranu i bledu tylko w konsoli (tak dzialalo wczesniej), pokazujemy baner
+// z jasnym opisem i przyciskiem odswiezenia. Szczegoly techniczne (stack)
+// sa zwijane, ale dostepne - przydatne przy zglaszaniu bledu.
+const startErrorMessages = [];
+function reportInitError(label, err) {
+  console.error(`[init] ${label} nie powiodl sie:`, err);
+  startErrorMessages.push(`${label}: ${err && err.message ? err.message : err}`);
+  startErrorText.textContent =
+    startErrorMessages.length === 1
+      ? `Nie udało się uruchomić: ${startErrorMessages[0].split(":")[0]}. Spróbuj odświeżyć.`
+      : `Nie udało się uruchomić ${startErrorMessages.length} elementów aplikacji. Spróbuj odświeżyć.`;
+  startErrorDetails.textContent = startErrorMessages.join("\n");
+  startErrorBanner.classList.remove("hidden");
+}
+startErrorRetryBtn.addEventListener("click", () => window.location.reload());
+startErrorDetailsToggle.addEventListener("click", () => {
+  startErrorDetails.classList.toggle("hidden");
+});
+
 const markerPanel = document.getElementById("marker-panel");
 const markerPanelTitle = document.getElementById("marker-panel-title");
 const markerAttribution = document.getElementById("marker-attribution");
@@ -3342,19 +3368,92 @@ async function syncApplyUiRestrictions() {
 }
 
 // --- Start ---
+//
+// Kazdy krok w wlasnym try/catch: dawniej to byl jeden nieopakowany lancuch
+// await - jeden wyjatek gdziekolwiek (np. nieprawidlowy/odwolany link
+// serwisowy, blad IndexedDB) przerywal WSZYSTKO po nim, dajac pusty ekran
+// bez zadnego komunikatu. Krytyczne kroki (bez ktorych appka jest
+// bezuzyteczna) pokazuja baner bledu przez reportInitError; pomniejsze tylko
+// loguja i appka jedzie dalej na tym, co sie udalo wczytac.
 (async function init() {
-  await syncTryUrlServiceLogin();
-  await syncMigrateLegacyIds();
-  await loadSymbolTypes();
-  renderSymbolPalette();
-  await loadBuildings();
-  await ensureDeviceLabel();
-  reportEmails.value = (await dbGetMeta("reportEmails")) || "";
-  await refreshBackupInfo();
-  await refreshBackupDirUI();
-  await maybeAutoRestore();
-  syncWireUi();
-  await syncApplyUiRestrictions();
-  syncTryFlush();
-  syncPull();
+  let serviceLinkResult = "none";
+  try {
+    serviceLinkResult = await syncTryUrlServiceLogin();
+  } catch (err) {
+    reportInitError("Link serwisowy", err);
+  }
+  if (serviceLinkResult === "invalid") {
+    startErrorText.textContent =
+      "Ten link serwisowy jest nieprawidłowy, wygasł albo został odwołany. Poproś o nowy link.";
+    startErrorDetails.textContent = "";
+    startErrorBanner.classList.remove("hidden");
+  }
+
+  try {
+    await syncMigrateLegacyIds();
+  } catch (err) {
+    reportInitError("Migracja danych lokalnych", err);
+  }
+
+  try {
+    await loadSymbolTypes();
+    renderSymbolPalette();
+  } catch (err) {
+    reportInitError("Wczytanie typów symboli", err);
+  }
+
+  try {
+    await loadBuildings();
+  } catch (err) {
+    reportInitError("Wczytanie budynków i planów", err);
+  }
+
+  try {
+    await ensureDeviceLabel();
+  } catch (err) {
+    console.error("[init] ensureDeviceLabel:", err);
+  }
+
+  try {
+    reportEmails.value = (await dbGetMeta("reportEmails")) || "";
+  } catch (err) {
+    console.error("[init] wczytanie adresow e-mail raportu:", err);
+  }
+
+  try {
+    await refreshBackupInfo();
+  } catch (err) {
+    console.error("[init] refreshBackupInfo:", err);
+  }
+
+  try {
+    await refreshBackupDirUI();
+  } catch (err) {
+    console.error("[init] refreshBackupDirUI:", err);
+  }
+
+  try {
+    await maybeAutoRestore();
+  } catch (err) {
+    console.error("[init] maybeAutoRestore:", err);
+  }
+
+  try {
+    syncWireUi();
+  } catch (err) {
+    reportInitError("Uruchomienie panelu synchronizacji", err);
+  }
+
+  try {
+    await syncApplyUiRestrictions();
+  } catch (err) {
+    console.error("[init] syncApplyUiRestrictions:", err);
+  }
+
+  try {
+    syncTryFlush();
+    syncPull();
+  } catch (err) {
+    console.error("[init] syncTryFlush/syncPull:", err);
+  }
 })();

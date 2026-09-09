@@ -77,23 +77,49 @@ async function syncLogin(serverUrl, email, password) {
 // adresu, zeby nie zostal np. w historii przegladarki po zrzucie ekranu.
 const SYNC_DEFAULT_SERVER_URL = "https://ppoz.gteam.pl";
 
+// Zwraca "none" (brak parametru - nic do zrobienia), "ok" (link przyjety -
+// zweryfikowany online albo, gdy offline, przyjety optymistycznie zgodnie z
+// zasada offline-first) albo "invalid" (serwer jednoznacznie odmowil - link
+// odwolany/wygasly, NIE zapisujemy tokenu). Rozroznienie "invalid" od
+// "offline" jest wazne: bez niego kazdy problem z siecia przy pierwszym
+// otwarciu linku wygladalby dla serwisanta jak odwolany dostep.
 async function syncTryUrlServiceLogin() {
   const params = new URLSearchParams(window.location.search);
   const token = params.get("service");
-  if (!token) return false;
+  if (!token) return "none";
 
-  await dbSetMeta("syncServerUrl", SYNC_DEFAULT_SERVER_URL);
-  await dbSetMeta("syncToken", token);
-  await dbSetMeta("isServiceMode", true);
-
+  // Czyscimy adres z tokenu niezaleznie od wyniku weryfikacji - zeby link nie
+  // zostal w historii przegladarki / na zrzucie ekranu.
   params.delete("service");
   const cleanUrl = window.location.pathname + (params.toString() ? `?${params}` : "") + window.location.hash;
   window.history.replaceState({}, "", cleanUrl);
 
+  let deviceName = null;
+  try {
+    const res = await fetch(`${SYNC_DEFAULT_SERVER_URL}/api/whoami`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.status === 401 || res.status === 403) {
+      return "invalid";
+    }
+    if (res.ok) {
+      const body = await res.json().catch(() => ({}));
+      deviceName = body.device_name || null;
+    }
+    // Inny kod (np. 5xx) - traktujemy jak brak sieci, kontynuujemy nizej.
+  } catch (err) {
+    console.warn("[sync] nie udalo sie zweryfikowac linku serwisowego online, przyjmuje offline:", err);
+  }
+
+  await dbSetMeta("syncServerUrl", SYNC_DEFAULT_SERVER_URL);
+  await dbSetMeta("syncToken", token);
+  await dbSetMeta("isServiceMode", true);
+  if (deviceName) await dbSetMeta("serviceLinkLabel", deviceName);
+
   await syncMigrateLegacyIds();
   syncTryFlush();
   syncPull();
-  return true;
+  return "ok";
 }
 
 async function syncIsServiceMode() {

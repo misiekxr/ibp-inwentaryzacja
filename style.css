@@ -40,6 +40,48 @@ h1, h2, h3 {
 
 #backup-banner.hidden { display: none; }
 
+#start-error-banner {
+  background: var(--danger);
+  color: #fff;
+  padding: 10px 12px;
+  text-align: center;
+}
+
+#start-error-banner.hidden { display: none; }
+
+#start-error-banner p {
+  margin: 0 0 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.start-error-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.start-error-actions button {
+  padding: 6px 14px;
+  font-size: 0.85rem;
+}
+
+#start-error-details {
+  margin: 8px auto 0;
+  max-width: 90%;
+  max-height: 30vh;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+#start-error-details.hidden { display: none; }
+
 header {
   background: var(--panel);
   border-bottom: 1px solid var(--border);

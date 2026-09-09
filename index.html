@@ -15,6 +15,14 @@
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+<div id="start-error-banner" class="hidden">
+  <p id="start-error-text"></p>
+  <div class="start-error-actions">
+    <button type="button" id="start-error-retry">Odśwież aplikację</button>
+    <button type="button" id="start-error-details-toggle" class="secondary">Szczegóły</button>
+  </div>
+  <pre id="start-error-details" class="hidden"></pre>
+</div>
 <div id="backup-banner" class="hidden"></div>
 
 <header>
