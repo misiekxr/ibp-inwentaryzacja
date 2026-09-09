@@ -697,10 +697,35 @@ async function buildingsFromDb() {
     byCode[r.buildingCode].plans.push({ file: r.file, name: r.name, sortOrder: r.sortOrder });
   }
   const list = Object.values(byCode);
-  list.sort((a, b) => a.code.localeCompare(b.code));
+  // Budynki z etykieta "DS N ..." sortujemy po tym numerze (zeby lista
+  // pokazywala DS 1, DS 2, DS 3... po kolei, nie alfabetycznie po kodzie -
+  // ARKA/CENTAUR/LABIRYNT/RAJ/TALIZMAN/ZODIAK alfabetycznie wyszlyby w innej
+  // kolejnosci niz numery domow studenckich), reszta zostaje alfabetycznie.
+  const dsNumber = (code) => {
+    const m = /^DS (\d+)/.exec(BUILDING_DISPLAY_NAMES[code] || "");
+    return m ? Number(m[1]) : null;
+  };
+  list.sort((a, b) => {
+    const da = dsNumber(a.code);
+    const db = dsNumber(b.code);
+    if (da !== null && db !== null) return da - db;
+    return a.code.localeCompare(b.code);
+  });
   for (const b of list) b.plans.sort((a, b2) => a.sortOrder - b2.sortOrder);
   return list;
 }
+
+// Recznie utrzymana lista czytelnych nazw dla kodow, ktore same w sobie nic
+// nie mowia (numer domu studenckiego != nazwa) - dla reszty budynkow po
+// prostu pokazujemy to, co juz mamy (kod albo buildingName z bazy).
+const BUILDING_DISPLAY_NAMES = {
+  ARKA: "DS 1 Arka",
+  CENTAUR: "DS 2 Centaur",
+  LABIRYNT: "DS 3 Labirynt",
+  TALIZMAN: "DS 4 Talizman",
+  ZODIAK: "DS 5 Zodiak",
+  RAJ: "DS 6 Raj",
+};
 
 async function loadBuildings() {
   buildingsData = await buildingsFromDb();
@@ -708,7 +733,7 @@ async function loadBuildings() {
   for (const b of buildingsData) {
     const opt = document.createElement("option");
     opt.value = b.code;
-    opt.textContent = b.name;
+    opt.textContent = BUILDING_DISPLAY_NAMES[b.code] || b.name;
     buildingSelect.appendChild(opt);
   }
 
