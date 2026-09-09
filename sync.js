@@ -62,11 +62,42 @@ async function syncLogin(serverUrl, email, password) {
   if (!res.ok) throw new Error(body.error || `Blad logowania (HTTP ${res.status})`);
   await dbSetMeta("syncServerUrl", url);
   await dbSetMeta("syncToken", body.token);
+  await dbSetMeta("isServiceMode", false);
   await syncMigrateLegacyIds();
   await syncEnqueueAllExisting();
   syncTryFlush();
   syncPull();
   return body.token;
+}
+
+// Link dla serwisanta: token w adresie URL (?service=...), bez logowania.
+// Uprawnienia (jedna kategoria, brak pomiarow, brak cudzych notatek) sa
+// egzekwowane przez serwer - to tutaj tylko przelacza interfejs w tryb
+// uproszczony (patrz syncApplyUiRestrictions w app.js) i chowa token z paska
+// adresu, zeby nie zostal np. w historii przegladarki po zrzucie ekranu.
+const SYNC_DEFAULT_SERVER_URL = "https://ppoz.gteam.pl";
+
+async function syncTryUrlServiceLogin() {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("service");
+  if (!token) return false;
+
+  await dbSetMeta("syncServerUrl", SYNC_DEFAULT_SERVER_URL);
+  await dbSetMeta("syncToken", token);
+  await dbSetMeta("isServiceMode", true);
+
+  params.delete("service");
+  const cleanUrl = window.location.pathname + (params.toString() ? `?${params}` : "") + window.location.hash;
+  window.history.replaceState({}, "", cleanUrl);
+
+  await syncMigrateLegacyIds();
+  syncTryFlush();
+  syncPull();
+  return true;
+}
+
+async function syncIsServiceMode() {
+  return !!(await dbGetMeta("isServiceMode"));
 }
 
 async function syncLogout() {
@@ -80,6 +111,7 @@ async function syncLogout() {
     }
   }
   await dbSetMeta("syncToken", null);
+  await dbSetMeta("isServiceMode", false);
 }
 
 function syncIsLoggedIn(cfg) {
@@ -573,7 +605,12 @@ async function syncApplyRemoteRecord(item) {
     return;
   }
 
-  const record = { ...item.data, id: item.id, _syncUpdatedAt: item.updated_at };
+  const record = {
+    ...item.data,
+    id: item.id,
+    _syncUpdatedAt: item.updated_at,
+    _updatedByDeviceName: item.updated_by_device_name || null,
+  };
   if (store === "markers") {
     if (!record.planKey) record.planKey = planKeyOf(record.buildingCode, record.planFile);
     const existing = await db.get(store, item.id);
@@ -771,6 +808,131 @@ function syncWireUi() {
   }, 60000);
 
   syncRenderStatus();
+  syncWireServiceLinksUi();
+}
+
+// --- Linki dla serwisantow (dostep bez logowania, jedna kategoria) ---
+
+async function syncCreateServiceLink(label, category, expiresInDays) {
+  const cfg = await syncGetConfig();
+  if (!syncIsLoggedIn(cfg)) throw new Error("Zaloguj się najpierw.");
+  const res = await fetch(`${cfg.serverUrl}/api/service-links`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.token}` },
+    body: JSON.stringify({ label, category, expires_in_days: expiresInDays || null }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Błąd (HTTP ${res.status})`);
+  return body;
+}
+
+async function syncListServiceLinks() {
+  const cfg = await syncGetConfig();
+  if (!syncIsLoggedIn(cfg)) return [];
+  const res = await fetch(`${cfg.serverUrl}/api/service-links`, { headers: { Authorization: `Bearer ${cfg.token}` } });
+  if (!res.ok) return [];
+  const body = await res.json();
+  return body.links || [];
+}
+
+async function syncRevokeServiceLink(id) {
+  const cfg = await syncGetConfig();
+  if (!syncIsLoggedIn(cfg)) return;
+  await fetch(`${cfg.serverUrl}/api/devices/${id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${cfg.token}` },
+  });
+}
+
+function syncServiceLinkStatus(link) {
+  if (link.revoked_at) return "odwołany";
+  if (link.expires_at && new Date(link.expires_at.replace(" ", "T") + "Z") < new Date()) return "wygasł";
+  return "aktywny";
+}
+
+async function syncRenderServiceLinks() {
+  const listEl = document.getElementById("service-links-list");
+  if (!listEl) return;
+  const links = await syncListServiceLinks();
+  listEl.innerHTML = "";
+  if (!links.length) {
+    listEl.textContent = "Brak utworzonych linków.";
+    return;
+  }
+  for (const link of links) {
+    const box = document.createElement("div");
+    box.className = "sync-conflict-item";
+    const status = syncServiceLinkStatus(link);
+    const p1 = document.createElement("p");
+    p1.innerHTML = `<strong>${link.device_name}</strong> — kategoria: ${link.restrict_category || "SERWIS"} — status: ${status}`;
+    const p2 = document.createElement("p");
+    p2.textContent =
+      `Utworzono: ${new Date(link.created_at.replace(" ", "T") + "Z").toLocaleString("pl-PL")}` +
+      (link.expires_at ? ` · Ważny do: ${new Date(link.expires_at.replace(" ", "T") + "Z").toLocaleDateString("pl-PL")}` : "") +
+      (link.last_used_at ? ` · Ostatnio użyty: ${new Date(link.last_used_at.replace(" ", "T") + "Z").toLocaleString("pl-PL")}` : "");
+    box.appendChild(p1);
+    box.appendChild(p2);
+    if (status === "aktywny") {
+      const revokeBtn = document.createElement("button");
+      revokeBtn.type = "button";
+      revokeBtn.className = "danger";
+      revokeBtn.textContent = "Wyłącz link";
+      revokeBtn.addEventListener("click", async () => {
+        if (!confirm(`Wyłączyć link "${link.device_name}"? Serwisant straci dostęp natychmiast.`)) return;
+        await syncRevokeServiceLink(link.id);
+        await syncRenderServiceLinks();
+      });
+      box.appendChild(revokeBtn);
+    }
+    listEl.appendChild(box);
+  }
+}
+
+function syncWireServiceLinksUi() {
+  const createBtn = document.getElementById("service-link-create-btn");
+  if (!createBtn) return;
+
+  createBtn.addEventListener("click", async () => {
+    const label = document.getElementById("service-link-label").value.trim();
+    const category = document.getElementById("service-link-category").value.trim() || "SERWIS";
+    const expiresInput = document.getElementById("service-link-expires").value.trim();
+    const expiresInDays = expiresInput ? Number(expiresInput) : null;
+    if (!label) {
+      alert("Podaj etykietę linku (np. nazwę firmy).");
+      return;
+    }
+    createBtn.disabled = true;
+    try {
+      const result = await syncCreateServiceLink(label, category, expiresInDays);
+      const url = `${window.location.origin}${window.location.pathname}?service=${result.token}`;
+      const resultEl = document.getElementById("service-link-result");
+      resultEl.innerHTML = "";
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.textContent = url;
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.className = "secondary";
+      copyBtn.textContent = "Kopiuj";
+      copyBtn.addEventListener("click", () => {
+        navigator.clipboard.writeText(url).catch(() => {});
+      });
+      resultEl.appendChild(document.createTextNode("Link gotowy: "));
+      resultEl.appendChild(link);
+      resultEl.appendChild(document.createTextNode(" "));
+      resultEl.appendChild(copyBtn);
+      document.getElementById("service-link-label").value = "";
+      document.getElementById("service-link-expires").value = "";
+      await syncRenderServiceLinks();
+    } catch (err) {
+      alert(err.message || "Nie udało się utworzyć linku.");
+    } finally {
+      createBtn.disabled = false;
+    }
+  });
+
+  syncRenderServiceLinks();
 }
 
 // syncMigrateLegacyIds() i start (syncWireUi/syncTryFlush/syncPull) sa wywolywane

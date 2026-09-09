@@ -386,6 +386,7 @@ const backupBanner = document.getElementById("backup-banner");
 
 const markerPanel = document.getElementById("marker-panel");
 const markerPanelTitle = document.getElementById("marker-panel-title");
+const markerAttribution = document.getElementById("marker-attribution");
 const markerDone = document.getElementById("marker-done");
 const markerLayer = document.getElementById("marker-layer");
 const markerDueDate = document.getElementById("marker-due-date");
@@ -463,6 +464,7 @@ const valueModalOk = document.getElementById("value-modal-ok");
 const valueModalCancel = document.getElementById("value-modal-cancel");
 
 let buildingsData = [];
+let SERVICE_MODE = false;
 let map = null;
 let imageOverlay = null;
 let leafletMarkers = {}; // id -> L.marker
@@ -582,6 +584,20 @@ async function deleteCategory(name) {
 }
 
 async function populateCategorySelect(selected) {
+  // Tryb serwisowy: kategoria jest zablokowana na SERWIS (i tak wymuszana
+  // przez serwer niezaleznie od tego co wyslemy - to tylko czytelnosc UI).
+  if (SERVICE_MODE) {
+    markerCategory.innerHTML = "";
+    const opt = document.createElement("option");
+    opt.value = "SERWIS";
+    opt.textContent = "SERWIS";
+    markerCategory.appendChild(opt);
+    markerCategory.value = "SERWIS";
+    markerCategory.disabled = true;
+    markerCategoryCustom.classList.add("hidden");
+    return;
+  }
+  markerCategory.disabled = false;
   const cats = await knownCategories();
   markerCategory.innerHTML = "";
   const optNone = document.createElement("option");
@@ -1589,6 +1605,12 @@ async function openMarkerPanel(m) {
   editingMarkerId = m.id;
   const symbolType = m.symbolTypeId != null ? symbolTypesData.find((t) => t.id === m.symbolTypeId) : null;
   markerPanelTitle.textContent = symbolType ? `${symbolType.name} #${m.id}` : `Punkt #${m.id}`;
+  if (m._updatedByDeviceName) {
+    markerAttribution.textContent = `Ostatnio zmienione przez: ${m._updatedByDeviceName}`;
+    markerAttribution.classList.remove("hidden");
+  } else {
+    markerAttribution.classList.add("hidden");
+  }
   markerDone.checked = !!m.done;
   markerLayer.value = m.layer || "inventory";
   markerDueDate.value = m.dueDate || "";
@@ -3307,8 +3329,21 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+// Chowa zakladki Pomiary i Kopia zapasowa w trybie serwisowym (link bez
+// logowania - patrz syncTryUrlServiceLogin w sync.js). Prawdziwa granica
+// bezpieczenstwa (jedna kategoria, brak dostepu do cudzych notatek) jest
+// egzekwowana przez serwer, nie tutaj - to tylko upraszcza interfejs.
+async function syncApplyUiRestrictions() {
+  SERVICE_MODE = await syncIsServiceMode();
+  if (!SERVICE_MODE) return;
+  document
+    .querySelectorAll('.tab-btn[data-tab="pomiary"], .tab-btn[data-tab="backup"]')
+    .forEach((btn) => btn.classList.add("hidden"));
+}
+
 // --- Start ---
 (async function init() {
+  await syncTryUrlServiceLogin();
   await syncMigrateLegacyIds();
   await loadSymbolTypes();
   renderSymbolPalette();
@@ -3319,6 +3354,7 @@ if ("serviceWorker" in navigator) {
   await refreshBackupDirUI();
   await maybeAutoRestore();
   syncWireUi();
+  await syncApplyUiRestrictions();
   syncTryFlush();
   syncPull();
 })();

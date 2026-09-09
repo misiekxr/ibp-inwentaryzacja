@@ -76,6 +76,7 @@
     </div>
     <div id="marker-panel" class="hidden">
       <h3 id="marker-panel-title">Punkt</h3>
+      <p id="marker-attribution" class="marker-attribution hidden"></p>
       <label>Warstwa pracy
         <select id="marker-layer">
           <option value="inventory">Inwentaryzacja IBP</option>
@@ -327,6 +328,27 @@
         <h3 id="sync-conflicts-title">Konflikty do przejrzenia</h3>
         <div id="sync-conflicts-list"></div>
       </div>
+    </div>
+
+    <div class="backup-panel" id="service-links-panel">
+      <h2>Linki dla serwisantów</h2>
+      <p>
+        Osobny link, bez logowania — po otwarciu serwisant widzi tylko wybraną kategorię (nie Twoje
+        notatki), nie ma dostępu do pomiarów ani kopii zapasowej, i może tylko dodawać punkty (zdjęcie
+        + notatka co jest do zrobienia). Możesz go wyłączyć w każdej chwili.
+      </p>
+      <label>Etykieta (np. nazwa firmy)
+        <input type="text" id="service-link-label" placeholder="np. Serwis gaśnic - wrzesień 2026">
+      </label>
+      <label>Kategoria, którą serwisant będzie widział i nanosił
+        <input type="text" id="service-link-category" value="SERWIS">
+      </label>
+      <label>Ważność w dniach (puste = bez limitu, można odwołać ręcznie)
+        <input type="number" id="service-link-expires" placeholder="np. 30" min="1" max="365">
+      </label>
+      <button id="service-link-create-btn" type="button">Utwórz link</button>
+      <p id="service-link-result"></p>
+      <div id="service-links-list"></div>
     </div>
 
     <div class="backup-panel">

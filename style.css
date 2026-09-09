@@ -427,6 +427,13 @@ main {
 
 .save-status.saving { color: var(--muted); }
 
+.marker-attribution {
+  margin: 0 0 6px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
 .link-btn {
   background: none;
   border: none;
