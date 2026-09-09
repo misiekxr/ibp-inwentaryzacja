@@ -1,4 +1,4 @@
-const CACHE_VERSION = "ibp-v30";
+const CACHE_VERSION = "ibp-v31";
 
 const CORE_FILES = [
   "./",
@@ -41,6 +41,20 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+
+  // Cache-owanie tylko wlasnych, statycznych plikow appki (ten sam origin).
+  // Zewnetrzne zadania (serwer synchronizacji ppoz.gteam.pl - obrazy planow,
+  // zdjecia, wywolania API z URL-em zmieniajacym sie co kazde zapytanie np.
+  // ?since=...) NIGDY nie trafiaja do Cache Storage - inaczej rosloby to bez
+  // ograniczen i zapychalo limit miejsca strony (dokladnie to sie stalo:
+  // QuotaExceededError mimo malej faktycznej ilosci danych w IndexedDB).
+  // Te dane i tak trafiaja gdzie trzeba - do IndexedDB przez sync.js.
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
   event.respondWith(
     (async () => {
       const cached = await caches.match(event.request);
