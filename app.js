@@ -102,6 +102,28 @@ async function dbGetAllMarkers() {
   return db.getAll("markers");
 }
 
+// Cykl zycia wydarzen (markerow) - Kosz/Archiwum + prosby serwisu czekajace na
+// zatwierdzenie administratora (patrz performMarkerLifecycleAction i zakladka
+// Uprawnienia). "Aktywne" to widok domyslny wszedzie indziej w appce (mapa,
+// inwentaryzacja, eksporty). SERVICE_MODE (app.js, ustawiane w init()) mowi,
+// czy TO urzadzenie jest zgloszajacym - dla niego wlasna, jeszcze
+// niezatwierdzona prosba juz oznacza "w koszu/archiwum u mnie", zgodnie z
+// ustalonym modelem (u admina i innych urzadzen zostaje w pelni aktywny, dopoki
+// ktos z uprawnieniami administratora nie zatwierdzi/odrzuci).
+function isMarkerActive(m) {
+  if (m.deletedAt || m.archivedAt) return false;
+  if (m.pendingAction && SERVICE_MODE) return false;
+  return true;
+}
+function isMarkerInTrash(m) {
+  if (m.deletedAt) return true;
+  return !!(m.pendingAction === "delete" && SERVICE_MODE);
+}
+function isMarkerInArchive(m) {
+  if (m.archivedAt) return true;
+  return !!(m.pendingAction === "archive" && SERVICE_MODE);
+}
+
 async function dbGetMeta(key) {
   const db = await dbPromise;
   const row = await db.get("meta", key);
@@ -367,6 +389,7 @@ const planSelect = document.getElementById("plan-select");
 const inventoryBuildingFilter = document.getElementById("inventory-building-filter");
 const inventoryPlanFilter = document.getElementById("inventory-plan-filter");
 const inventoryStatusFilter = document.getElementById("inventory-status-filter");
+const inventoryLifecycleFilter = document.getElementById("inventory-lifecycle-filter");
 const inventoryLayerFilter = document.getElementById("inventory-layer-filter");
 const inventoryCategoryFilter = document.getElementById("inventory-category-filter");
 const exportCsvLink = document.getElementById("export-csv-link");
@@ -431,6 +454,7 @@ const markerPhotoGalleryInput = document.getElementById("marker-photo-gallery-in
 const markerPhotoGallery = document.getElementById("marker-photo-gallery");
 const saveStatus = document.getElementById("save-status");
 const markerDeleteBtn = document.getElementById("marker-delete");
+const markerArchiveBtn = document.getElementById("marker-archive");
 const markerCloseBtn = document.getElementById("marker-close");
 
 const exportBackupBtn = document.getElementById("export-backup-btn");
@@ -515,6 +539,37 @@ let calibrationMarker1 = null; // tymczasowy L.circleMarker dla powyzszego
 
 symbolPaletteToggle.addEventListener("click", () => {
   symbolPaletteList.classList.toggle("hidden");
+});
+
+// Wspolne rozwijane menu nad mapa (paleta/filtr warstw/kalibracja/gdzie
+// jestem/obrot) - zastepuje dawniej rozsypane po calym ekranie osobne
+// przyciski. Zamyka sie po stuknieciu gdziekolwiek poza nim (w tym na samym
+// planie), nie trzeba wiec osobno zamykac go po kazdej akcji w menu.
+const mapMenuToggle = document.getElementById("map-menu-toggle");
+const mapMenuList = document.getElementById("map-menu-list");
+mapMenuToggle.addEventListener("click", (e) => {
+  e.stopPropagation();
+  mapMenuList.classList.toggle("hidden");
+});
+document.addEventListener("click", (e) => {
+  if (mapMenuList.classList.contains("hidden")) return;
+  if (e.target.closest("#map-menu")) return;
+  mapMenuList.classList.add("hidden");
+});
+
+// Pasek Budynek/Plan nad mapa - domyslnie zwiniety na telefonie (patrz
+// media query w style.css), zeby nie zajmowac na stale miejsca nad planem.
+// Na desktopie ta logika jest niewidoczna (reguly .collapsed obowiazuja
+// tylko ponizej 640px), wiec .controls tam zawsze zostaje widoczny.
+const headerControlsToggle = document.getElementById("header-controls-toggle");
+const headerControls = document.getElementById("header-controls");
+function updateHeaderControlsSummary() {
+  const buildingLabel = buildingSelect.selectedOptions[0] ? buildingSelect.selectedOptions[0].textContent : "";
+  const planLabel = planSelect.selectedOptions[0] ? planSelect.selectedOptions[0].textContent : "";
+  headerControlsToggle.textContent = buildingLabel ? `${buildingLabel}${planLabel ? " · " + planLabel : ""} ▾` : "Wybierz budynek/plan ▾";
+}
+headerControlsToggle.addEventListener("click", () => {
+  headerControls.classList.toggle("collapsed");
 });
 
 function planKeyOf(buildingCode, file) {
@@ -769,6 +824,24 @@ const BUILDING_DISPLAY_NAMES = {
   RAJ: "DS 6 Raj",
 };
 
+// Ekran "brak planów" wczesniej ZAWSZE kazal recznie wczytac plik planów -
+// mylace, gdy plany po prostu jeszcze sciagaja sie z serwera (pierwsze
+// uruchomienie na nowym urzadzeniu, albo po utracie lokalnych danych)
+// i za chwile pojawia sie same. Zalogowanym pokazujemy wiec info o
+// synchronizacji zamiast instrukcji recznego importu; syncSetProgress
+// (sync.js) dopisuje tu na biezaco co konkretnie sie teraz pobiera.
+async function updateEmptyStateSyncHint() {
+  const hint = document.getElementById("empty-state-sync-status");
+  if (!hint) return;
+  const cfg = await syncGetConfig();
+  if (syncIsLoggedIn(cfg)) {
+    hint.innerHTML = "Trwa pobieranie planów budynków z serwera — przy pierwszym uruchomieniu może to chwilę potrwać. Nie zamykaj aplikacji.";
+  } else {
+    hint.innerHTML =
+      'Przejdź do zakładki <strong>Kopia zapasowa</strong> i wczytaj plik planów (np. plany-B1.json), albo zaloguj się tam do synchronizacji, żeby pobrały się automatycznie.';
+  }
+}
+
 async function loadBuildings() {
   buildingsData = await buildingsFromDb();
   buildingSelect.innerHTML = "";
@@ -790,6 +863,7 @@ async function loadBuildings() {
     calibrateBtn.classList.add("hidden");
     rotateLeftBtn.classList.add("hidden");
     rotateRightBtn.classList.add("hidden");
+    await updateEmptyStateSyncHint();
     return;
   }
   emptyState.classList.add("hidden");
@@ -843,7 +917,10 @@ async function loadPlans(buildingCode, preferredFile) {
 
 function initMapIfNeeded() {
   if (map) return;
-  map = L.map("map", { crs: L.CRS.Simple, minZoom: -5, zoomSnap: 0.25 });
+  // zoomControl: false - przyciski +/- sa zbedne na telefonie (pinch-to-zoom
+  // i podwojne stukniecie dzialaja bez zmian, to tylko usuwa widoczne
+  // przyciski, ktore na malym ekranie nakladaly sie na palete symboli).
+  map = L.map("map", { crs: L.CRS.Simple, minZoom: -5, zoomSnap: 0.25, zoomControl: false });
   map.on("click", onMapClick);
 }
 
@@ -857,6 +934,8 @@ function loadImageDimensions(url) {
 }
 
 async function selectPlan(buildingCode, file, name) {
+  updateHeaderControlsSummary();
+  headerControls.classList.add("collapsed"); // bez efektu na desktopie - patrz media query w style.css
   await closeMarkerPanel();
   // Kalibracja (2 stukniecia) jest przywiazana do jednego, konkretnego planu -
   // zmiana planu/budynku w trakcie musi ja anulowac, inaczej punkt 1. sprzed
@@ -981,6 +1060,7 @@ rotateRightBtn.addEventListener("click", () => rotateCurrentPlan("cw"));
 let mapLayerFilter = "";
 
 function markerMatchesMapFilter(m) {
+  if (!isMarkerActive(m)) return false;
   return !mapLayerFilter || m.layer === mapLayerFilter;
 }
 
@@ -1915,25 +1995,57 @@ markerPhotoCamera.addEventListener("change", () => {
 });
 markerPhotoGalleryInput.addEventListener("change", () => handlePhotoFiles(markerPhotoGalleryInput));
 
-markerDeleteBtn.addEventListener("click", async () => {
+// Usun/Archiwizuj punktu - odwracalne (Kosz/Archiwum, zakladka Inwentaryzacja),
+// nie twarde kasowanie jak dawniej (patrz dbDeleteMarker - ten zostaje tylko
+// dla "porzuconego pustego szkicu" w closeMarkerPanel, to inny przypadek).
+// Administrator: dzieje sie od razu. Serwis: to tylko PROSBA - lokalnie u
+// niego ląduje od razu w jego wlasnym Koszu/Archiwum (patrz isMarkerActive),
+// ale u administratora zostaje w pelni aktywne, dopoki nie zatwierdzi/odrzuci
+// (zakladka Uprawnienia, sekcja "Prosby serwisu").
+async function performMarkerLifecycleAction(id, action) {
+  const field = action === "delete" ? "deletedAt" : "archivedAt";
+  if (SERVICE_MODE) {
+    await dbUpdateMarker(id, { pendingAction: action, pendingAt: new Date().toISOString() });
+    await syncEnqueueMarkerAction(id, `request-${action}`);
+  } else {
+    await dbUpdateMarker(id, { [field]: new Date().toISOString() });
+    await syncEnqueueMarkerAction(id, action);
+  }
+}
+
+async function undoMarkerLifecycleAction(id, action) {
+  const field = action === "delete" ? "deletedAt" : "archivedAt";
+  if (SERVICE_MODE) {
+    await syncEnqueueMarkerAction(id, "cancel-request");
+    await dbUpdateMarker(id, { pendingAction: null, pendingAt: null });
+  } else {
+    await syncEnqueueMarkerAction(id, "restore");
+    await dbUpdateMarker(id, { [field]: null });
+  }
+  const restored = await dbGetMarker(id);
+  if (restored && restored.planKey === currentPlanKey) addLeafletMarker(restored);
+  await loadInventory();
+}
+
+async function handleMarkerLifecycleButtonClick(action) {
   if (editingMarkerId == null) return;
   const id = editingMarkerId;
-  const snapshot = await dbGetMarker(id);
-  await dbDeleteMarker(id);
+  await performMarkerLifecycleAction(id, action);
   const old = leafletMarkers[id];
   if (old) map.removeLayer(old);
   delete leafletMarkers[id];
   editingMarkerId = null; // zapobiega ponownemu "sprzataniu" w closeMarkerPanel
   markerPanel.classList.add("hidden");
   await loadInventory();
-  if (snapshot) {
-    showSnackbar("Punkt usunięty", async () => {
-      const restored = await dbAddMarker(snapshot);
-      if (restored.planKey === currentPlanKey) addLeafletMarker(restored);
-      await loadInventory();
-    });
-  }
-});
+  const verb = action === "delete" ? "usunięcie" : "archiwizację";
+  const doneLabel = action === "delete" ? "Punkt usunięty" : "Punkt zarchiwizowany";
+  showSnackbar(SERVICE_MODE ? `Zgłoszono ${verb} — zobaczysz w Koszu/Archiwum` : doneLabel, () =>
+    undoMarkerLifecycleAction(id, action)
+  );
+}
+
+markerDeleteBtn.addEventListener("click", () => handleMarkerLifecycleButtonClick("delete"));
+markerArchiveBtn.addEventListener("click", () => handleMarkerLifecycleButtonClick("archive"));
 
 markerCloseBtn.addEventListener("click", closeMarkerPanel);
 
@@ -2041,6 +2153,33 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
 
 const GPS_MATCH_RADIUS_M = 150;
 
+const locateCandidatesPanel = document.getElementById("locate-candidates-panel");
+const locateCandidatesList = document.getElementById("locate-candidates-list");
+
+// Zamiast zgadywac JEDEN, najblizszy budynek (myliło to, gdy dwa budynki np.
+// A1/A2 lezaly blisko siebie - zawsze wygrywal ten o kilka metrow blizszy, bez
+// mozliwosci poprawnego wyboru), pokazujemy liste WSZYSTKICH pobliskich
+// kandydatow posortowana wg odleglosci - uzytkownik wybiera wlasciwy.
+function showLocateCandidates(candidates) {
+  locateCandidatesList.innerHTML = "";
+  for (const c of candidates) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "secondary locate-candidate-item";
+    btn.textContent = `${BUILDING_DISPLAY_NAMES[c.code] || c.code} (~${Math.round(c.dist)} m)`;
+    btn.addEventListener("click", () => {
+      buildingSelect.value = c.code;
+      loadPlans(c.code);
+      locateCandidatesPanel.classList.add("hidden");
+    });
+    locateCandidatesList.appendChild(btn);
+  }
+  locateCandidatesPanel.classList.remove("hidden");
+}
+document.getElementById("locate-candidates-close").addEventListener("click", () => {
+  locateCandidatesPanel.classList.add("hidden");
+});
+
 locateBtn.addEventListener("click", async () => {
   if (!("geolocation" in navigator)) {
     alert("Ten telefon/przeglądarka nie obsługuje lokalizacji GPS.");
@@ -2059,23 +2198,21 @@ locateBtn.addEventListener("click", async () => {
       locateBtn.disabled = false;
       locateBtn.textContent = originalLabel;
       const { latitude, longitude } = pos.coords;
-      let best = null;
-      for (const [code, loc] of Object.entries(locations)) {
-        const dist = haversineMeters(latitude, longitude, loc.lat, loc.lon);
-        if (!best || dist < best.dist) best = { code, dist };
-      }
-      if (!best || best.dist > GPS_MATCH_RADIUS_M) {
+      const nearby = Object.entries(locations)
+        .map(([code, loc]) => ({ code, dist: haversineMeters(latitude, longitude, loc.lat, loc.lon) }))
+        .filter((c) => c.dist <= GPS_MATCH_RADIUS_M)
+        .sort((a, b) => a.dist - b.dist);
+      if (!nearby.length) {
         alert("Żaden ze znanych budynków nie jest wystarczająco blisko (albo nie mam jeszcze zapisanych jego współrzędnych).");
         return;
       }
-      if (best.code === currentBuildingCode) {
-        alert(`Wygląda na to, że już tu jesteś (${best.code}, ~${Math.round(best.dist)} m).`);
+      const candidates = nearby.filter((c) => c.code !== currentBuildingCode);
+      if (!candidates.length) {
+        alert(`Wygląda na to, że już tu jesteś (${currentBuildingCode}, ~${Math.round(nearby[0].dist)} m).`);
         return;
       }
-      if (confirm(`Wygląda na to, że jesteś przy budynku ${best.code} (~${Math.round(best.dist)} m stąd) — przełączyć?`)) {
-        buildingSelect.value = best.code;
-        loadPlans(best.code);
-      }
+      mapMenuList.classList.add("hidden");
+      showLocateCandidates(candidates);
     },
     (err) => {
       locateBtn.disabled = false;
@@ -2101,6 +2238,7 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
     if (btn.dataset.tab === "map" && map) setTimeout(() => map.invalidateSize(), 50);
     if (btn.dataset.tab === "inventory") loadInventory();
     if (btn.dataset.tab === "pomiary") loadPomiary();
+    if (btn.dataset.tab === "permissions") loadPermissions();
     if (btn.dataset.tab === "backup") refreshBackupInfo();
   });
 });
@@ -2194,6 +2332,7 @@ inventoryBuildingFilter.addEventListener("change", () => {
 });
 inventoryPlanFilter.addEventListener("change", loadInventory);
 inventoryStatusFilter.addEventListener("change", loadInventory);
+inventoryLifecycleFilter.addEventListener("change", loadInventory);
 inventoryLayerFilter.addEventListener("change", loadInventory);
 inventoryCategoryFilter.addEventListener("change", loadInventory);
 
@@ -2247,12 +2386,16 @@ async function loadInventory() {
   const buildingFilter = inventoryBuildingFilter.value;
   const planKey = inventoryPlanFilter.value;
   const statusFilter = inventoryStatusFilter.value;
+  const lifecycleFilter = inventoryLifecycleFilter.value; // "" (aktywne) | "trash" | "archive"
   const layerFilter = inventoryLayerFilter.value;
   const categoryFilter = inventoryCategoryFilter.value;
   let markers;
   if (planKey) markers = await dbGetMarkersByPlan(planKey);
   else if (buildingFilter) markers = await dbGetMarkersByBuilding(buildingFilter);
   else markers = await dbGetAllMarkers();
+  if (lifecycleFilter === "trash") markers = markers.filter(isMarkerInTrash);
+  else if (lifecycleFilter === "archive") markers = markers.filter(isMarkerInArchive);
+  else markers = markers.filter(isMarkerActive);
   if (statusFilter === "open") markers = markers.filter((m) => !m.done);
   if (statusFilter === "done") markers = markers.filter((m) => !!m.done);
   if (layerFilter) markers = markers.filter((m) => (m.layer || "inventory") === layerFilter);
@@ -2269,18 +2412,37 @@ async function loadInventory() {
     const statusCell = m.done
       ? `<span class="status-chip done">Załatwione</span>`
       : `<span class="status-chip open">Do zrobienia</span>`;
+    // W widoku aktywnym administrator widzi male "czeka na zatwierdzenie" przy
+    // pozycjach zgloszonych przez serwis (samemu serwisowi taka pozycja w
+    // ogole sie tu nie pokaze - patrz isMarkerActive - bo u niego juz jest
+    // "w koszu/archiwum"). W Koszu/Archiwum: administrator zawsze moze
+    // Przywrocic; serwis, dla WLASNEJ jeszcze niezatwierdzonej prosby, moze
+    // ja Cofnac (to samo dzialanie co "Przywroc" pod spodem - patrz
+    // undoMarkerLifecycleAction, ktora rozroznia to sama po roli).
+    const pendingBadge = !SERVICE_MODE && !lifecycleFilter && m.pendingAction
+      ? `<span class="status-chip pending">⏳ zgłoszenie: ${(m.pendingByDeviceName || "serwis").replace(/</g, "&lt;")}</span>`
+      : "";
+    let lifecycleAction = "";
+    if (lifecycleFilter === "trash" || lifecycleFilter === "archive") {
+      const action = lifecycleFilter === "trash" ? "delete" : "archive";
+      const canAct = !SERVICE_MODE || m.pendingAction;
+      const label = SERVICE_MODE ? "Cofnij prośbę" : "Przywróć";
+      if (canAct) {
+        lifecycleAction = ` · <a data-lifecycle-id="${m.id}" data-lifecycle-action="${action}">${label}</a>`;
+      }
+    }
     tr.innerHTML = `
       <td>${idx + 1}</td>
       <td>${m.buildingCode}</td>
       <td>${m.planName}</td>
-      <td>${statusCell}</td>
+      <td>${statusCell}${pendingBadge}</td>
       <td>${layerLabel(m.layer)}</td>
       <td>${(m.category || "").replace(/</g, "&lt;")}</td>
       <td>${(m.note || "").replace(/</g, "&lt;")}</td>
       <td>${m.dueDate || ""}${m.reviewDate ? ` / kontrola: ${m.reviewDate}` : ""}</td>
       <td>${photoCell}</td>
       <td>${(m.createdAt || "").replace("T", " ").slice(0, 19)}</td>
-      <td class="row-actions"><a data-id="${m.id}" data-plan="${m.planFile}">Pokaż na mapie</a></td>
+      <td class="row-actions"><a data-id="${m.id}" data-plan="${m.planFile}">Pokaż na mapie</a>${lifecycleAction}</td>
     `;
     if (m.photos && m.photos.length) {
       const thumbImg = tr.querySelector("img.thumb");
@@ -2306,6 +2468,9 @@ async function loadInventory() {
       }
     });
   });
+  tbody.querySelectorAll("a[data-lifecycle-id]").forEach((a) => {
+    a.addEventListener("click", () => undoMarkerLifecycleAction(a.dataset.lifecycleId, a.dataset.lifecycleAction));
+  });
 }
 
 // --- CSV export ---
@@ -2326,7 +2491,10 @@ function downloadBlob(blob, filename) {
 }
 
 async function exportCsv(buildingCode) {
-  const markers = buildingCode ? await dbGetMarkersByBuilding(buildingCode) : await dbGetAllMarkers();
+  let markers = buildingCode ? await dbGetMarkersByBuilding(buildingCode) : await dbGetAllMarkers();
+  // Kosz/Archiwum nie wchodza do eksportu domyslnie - patrz zakladka
+  // Inwentaryzacja (filtr "Widok") zeby je zobaczyc/wyeksportowac osobno.
+  markers = markers.filter(isMarkerActive);
   markers.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
   const header = ["Budynek", "Plan", "Typ", "Warstwa", "Status", "Kategoria", "Uwagi", "Termin", "Weryfikacja", "X", "Y", "Utworzono", "Zaktualizowano"];
   const lines = [header.map(csvEscape).join(";")];
@@ -2405,6 +2573,196 @@ deviceLabelInput.addEventListener("keydown", (e) => {
   }
 });
 
+// --- Zakladka Uprawnienia (tylko administrator - patrz syncApplyUiRestrictions) ---
+
+function permissionRowBox(titleHtml, subtitleLines, actionLabel, onAction) {
+  const box = document.createElement("div");
+  box.className = "sync-conflict-item";
+  const p1 = document.createElement("p");
+  p1.innerHTML = titleHtml;
+  box.appendChild(p1);
+  for (const line of subtitleLines) {
+    if (!line) continue;
+    const p = document.createElement("p");
+    p.textContent = line;
+    box.appendChild(p);
+  }
+  if (actionLabel) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = actionLabel === "Usuń" ? "danger" : "secondary";
+    btn.textContent = actionLabel;
+    btn.addEventListener("click", onAction);
+    box.appendChild(btn);
+  }
+  return box;
+}
+
+function formatPlDate(value) {
+  if (!value) return null;
+  return new Date(value.replace(" ", "T") + "Z").toLocaleString("pl-PL");
+}
+
+async function renderOwnerDevicesList() {
+  const listEl = document.getElementById("owner-devices-list");
+  if (!listEl) return;
+  const { devices, currentDeviceId } = await syncListOwnerDevices();
+  const active = devices.filter((d) => !d.revoked_at);
+  listEl.innerHTML = "";
+  if (!active.length) {
+    listEl.textContent = "Brak kont administratora.";
+    return;
+  }
+  for (const d of active) {
+    const isCurrent = d.id === currentDeviceId;
+    const box = permissionRowBox(
+      `<strong>${d.device_name}</strong> — Administrator${isCurrent ? " (to urządzenie)" : ""}`,
+      [
+        `Utworzono: ${formatPlDate(d.created_at) || "—"}`,
+        d.last_used_at ? `Ostatnio użyte: ${formatPlDate(d.last_used_at)}` : null,
+      ],
+      isCurrent ? null : "Usuń", // wlasnego, aktualnie uzywanego urzadzenia nie da sie usunac stad (natychmiastowe wylogowanie samego siebie)
+      async () => {
+        if (!confirm(`Usunąć dostęp administratora "${d.device_name}"? Trafi do Kosza uprawnień, można przywrócić.`)) return;
+        await syncRevokeServiceLink(d.id); // ten sam mechanizm co odwolanie linku serwisowego - DELETE /api/devices/{id}
+        await loadPermissions();
+      }
+    );
+    listEl.appendChild(box);
+  }
+}
+
+// Kosz uprawnien laczy odwolane konta administratora I odwolane/wygasle linki
+// serwisowe w jednym miejscu - to jedno wspolne miejsce "co zostalo usuniete",
+// mimo ze aktywne listy (Administratorzy / Linki dla serwisantow) sa osobne.
+async function renderPermissionsTrash() {
+  const listEl = document.getElementById("permissions-trash-list");
+  if (!listEl) return;
+  const [{ devices }, links] = await Promise.all([syncListOwnerDevices(), syncListServiceLinks()]);
+  const revokedOwners = devices.filter((d) => d.revoked_at).map((d) => ({ ...d, roleLabel: "Administrator" }));
+  const revokedLinks = links
+    .filter((l) => syncServiceLinkStatus(l) !== "aktywny")
+    .map((l) => ({ ...l, roleLabel: syncServiceLinkStatus(l) === "wygasł" ? "Serwis (wygasł)" : "Serwis" }));
+  const rows = [...revokedOwners, ...revokedLinks];
+  listEl.innerHTML = "";
+  if (!rows.length) {
+    listEl.textContent = "Kosz jest pusty.";
+    return;
+  }
+  for (const row of rows) {
+    const canRestore = row.roleLabel !== "Serwis (wygasł)"; // wygasly link trzeba wydac na nowo, samo przywrocenie nic nie da
+    const box = permissionRowBox(
+      `<strong>${row.device_name}</strong> — ${row.roleLabel}`,
+      [row.revoked_at ? `Usunięto: ${formatPlDate(row.revoked_at)}` : null],
+      canRestore ? "Przywróć" : null,
+      async () => {
+        await syncRestoreDevice(row.id);
+        await loadPermissions();
+      }
+    );
+    listEl.appendChild(box);
+  }
+}
+
+// Zgloszenia serwisu czekajace na zatwierdzenie - budowane z lokalnej bazy
+// (dokladnie jak kazdy inny widok w tej appce), nie osobnym zapytaniem do
+// serwera: administrator i tak dostaje te pola przy zwyklym pull() (patrz
+// syncApplyRemoteRecord), wiec sa juz na biezaco w IndexedDB.
+async function renderPendingRequests() {
+  const panel = document.getElementById("pending-requests-panel");
+  const listEl = document.getElementById("pending-requests-list");
+  if (!listEl || !panel) return;
+  const pending = (await dbGetAllMarkers()).filter((m) => m.pendingAction);
+  listEl.innerHTML = "";
+  if (!pending.length) {
+    listEl.textContent = "Brak oczekujących próśb.";
+    return;
+  }
+  for (const m of pending) {
+    const verb = m.pendingAction === "archive" ? "zarchiwizować" : "usunąć";
+    const box = document.createElement("div");
+    box.className = "sync-conflict-item";
+    const p1 = document.createElement("p");
+    p1.innerHTML = `<strong>${m.pendingByDeviceName || "Serwis"}</strong> chce ${verb} punkt w ${m.buildingCode} — ${m.planName}`;
+    const p2 = document.createElement("p");
+    p2.textContent = m.note ? `Notatka: ${m.note}` : "(bez notatki)";
+    box.appendChild(p1);
+    box.appendChild(p2);
+    const approveBtn = document.createElement("button");
+    approveBtn.type = "button";
+    approveBtn.textContent = "Zatwierdź";
+    approveBtn.addEventListener("click", async () => {
+      await syncEnqueueMarkerAction(m.id, "approve");
+      const col = m.pendingAction === "archive" ? "archivedAt" : "deletedAt";
+      await dbUpdateMarker(m.id, { [col]: new Date().toISOString(), pendingAction: null, pendingAt: null });
+      await loadPermissions();
+      await loadInventory();
+    });
+    const rejectBtn = document.createElement("button");
+    rejectBtn.type = "button";
+    rejectBtn.className = "secondary";
+    rejectBtn.textContent = "Odrzuć";
+    rejectBtn.addEventListener("click", async () => {
+      await syncEnqueueMarkerAction(m.id, "reject");
+      await dbUpdateMarker(m.id, { pendingAction: null, pendingAt: null });
+      await loadPermissions();
+      await loadInventory();
+    });
+    box.appendChild(approveBtn);
+    box.appendChild(rejectBtn);
+    listEl.appendChild(box);
+  }
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return "0 MB";
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function renderTrashSizeBanner() {
+  const banner = document.getElementById("permissions-trash-size-banner");
+  if (!banner) return;
+  const cfg = await syncGetConfig();
+  if (!syncIsLoggedIn(cfg)) {
+    banner.classList.add("hidden");
+    return;
+  }
+  const res = await fetch(`${cfg.serverUrl}/api/markers/trash-size`, { headers: { Authorization: `Bearer ${cfg.token}` } });
+  if (!res.ok) {
+    banner.classList.add("hidden");
+    return;
+  }
+  const body = await res.json();
+  const total = (body.trash_bytes || 0) + (body.archive_bytes || 0);
+  banner.textContent =
+    `Zdjęcia w Koszu: ${formatBytes(body.trash_bytes)} · w Archiwum: ${formatBytes(body.archive_bytes)}` +
+    (total > body.alert_bytes ? " — ⚠ dużo miejsca, warto ręcznie opróżnić Kosz (zakładka Inwentaryzacja)." : ".");
+  banner.classList.remove("hidden");
+}
+
+async function loadPermissions() {
+  try {
+    await renderOwnerDevicesList();
+  } catch (err) {
+    console.error("[permissions] konta administratora:", err);
+  }
+  try {
+    await renderPermissionsTrash();
+  } catch (err) {
+    console.error("[permissions] kosz uprawnień:", err);
+  }
+  try {
+    await renderPendingRequests();
+  } catch (err) {
+    console.error("[permissions] prośby serwisu:", err);
+  }
+  try {
+    await renderTrashSizeBanner();
+  } catch (err) {
+    console.error("[permissions] rozmiar kosza:", err);
+  }
+}
+
 async function refreshBackupInfo() {
   const last = await dbGetMeta("lastExportAt");
   if (last) {
@@ -2444,6 +2802,15 @@ async function buildBackupPayload() {
       photos,
       createdAt: m.createdAt,
       updatedAt: m.updatedAt,
+      // Kosz/Archiwum/prosby serwisu - kopia zapasowa to jedyne miejsce, ktore
+      // NIE filtruje po statusie (musi zachowac wszystko), wiec te pola musza
+      // tu jechac, zeby przywrocenie z kopii nie "odzyskiwalo" po cichu
+      // punktow z kosza jako znowu aktywnych.
+      deletedAt: m.deletedAt || null,
+      archivedAt: m.archivedAt || null,
+      pendingAction: m.pendingAction || null,
+      pendingAt: m.pendingAt || null,
+      pendingByDeviceName: m.pendingByDeviceName || null,
     });
   }
 
@@ -2525,6 +2892,11 @@ async function importBackupPayload(parsed) {
       photos,
       createdAt: r.createdAt || new Date().toISOString(),
       updatedAt: r.updatedAt || new Date().toISOString(),
+      deletedAt: r.deletedAt || null,
+      archivedAt: r.archivedAt || null,
+      pendingAction: r.pendingAction || null,
+      pendingAt: r.pendingAt || null,
+      pendingByDeviceName: r.pendingByDeviceName || null,
     });
     existingKeys.add(key);
     imported++;
@@ -3190,7 +3562,7 @@ async function renderPlanSection(doc, y, buildingCode, planFile, planName, marke
 }
 
 async function generatePlanReport(buildingCode, planKey, planFile, planName) {
-  const markers = await dbGetMarkersByPlan(planKey);
+  const markers = (await dbGetMarkersByPlan(planKey)).filter(isMarkerActive);
   markers.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
   if (!markers.length) {
     alert("Ten rzut nie ma jeszcze żadnych punktów do raportu.");
@@ -3232,7 +3604,7 @@ async function generatePlanReport(buildingCode, planKey, planFile, planName) {
 // punkty w kategoriach "czujki" i "propozycja lokalizacji dla ochroniarza".
 async function generateFullReport() {
   const allMarkers = await dbGetAllMarkers();
-  const filtered = allMarkers.filter((m) => REPORT_CATEGORIES.includes(m.category));
+  const filtered = allMarkers.filter((m) => isMarkerActive(m) && REPORT_CATEGORIES.includes(m.category));
   if (!filtered.length) {
     alert('Brak punktów w kategoriach "czujki" / "lokalizacja dla ochroniarza" do raportu.');
     return;
@@ -3290,7 +3662,7 @@ async function generateFullReport() {
 fullReportBtn.addEventListener("click", generateFullReport);
 
 async function generateWorkReport() {
-  const markers = (await dbGetAllMarkers()).filter((m) => !m.done);
+  const markers = (await dbGetAllMarkers()).filter((m) => isMarkerActive(m) && !m.done);
   if (!markers.length) {
     alert("Nie ma otwartych zadań do raportu.");
     return;
@@ -3349,9 +3721,32 @@ saveReportSettingsBtn.addEventListener("click", async () => {
 });
 
 // --- Service worker + PWA install ---
+//
+// Sama rejestracja ponizej nigdy wczesniej nie sprawdzala, czy jest nowsza
+// wersja - przegladarka robi to z wlasnej inicjatywy rzadko (glownie przy
+// twardym przeladowaniu), a nawet gdy nowy service worker sie juz zainstaluje
+// (skipWaiting+clients.claim w service-worker.js), otwarta karta ma stare
+// app.js/sync.js/index.html wciaz wczytane w pamieci - std konicznosc
+// recznego zamkniecia i otwarcia appki po kazdym wdrozeniu. Sprawdzamy wiec
+// aktywnie (te same momenty co synchronizacja danych - online/powrot do
+// karty/co 60s) i przeladowujemy raz, gdy nowy sw faktycznie przejmie kontrole.
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("service-worker.js").catch(() => {});
+  window.addEventListener("load", async () => {
+    const registration = await navigator.serviceWorker.register("service-worker.js").catch(() => null);
+    if (!registration) return;
+    const checkForUpdate = () => registration.update().catch(() => {});
+    window.addEventListener("online", checkForUpdate);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") checkForUpdate();
+    });
+    setInterval(checkForUpdate, 60000);
+  });
+
+  let swRefreshing = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (swRefreshing) return;
+    swRefreshing = true;
+    window.location.reload();
   });
 }
 
@@ -3360,10 +3755,9 @@ if ("serviceWorker" in navigator) {
 // bezpieczenstwa (jedna kategoria, brak dostepu do cudzych notatek) jest
 // egzekwowana przez serwer, nie tutaj - to tylko upraszcza interfejs.
 async function syncApplyUiRestrictions() {
-  SERVICE_MODE = await syncIsServiceMode();
   if (!SERVICE_MODE) return;
   document
-    .querySelectorAll('.tab-btn[data-tab="pomiary"], .tab-btn[data-tab="backup"]')
+    .querySelectorAll('.tab-btn[data-tab="pomiary"], .tab-btn[data-tab="backup"], .tab-btn[data-tab="permissions"]')
     .forEach((btn) => btn.classList.add("hidden"));
 }
 
@@ -3376,6 +3770,22 @@ async function syncApplyUiRestrictions() {
 // bezuzyteczna) pokazuja baner bledu przez reportInitError; pomniejsze tylko
 // loguja i appka jedzie dalej na tym, co sie udalo wczytac.
 (async function init() {
+  // Prosimy przegladarke o "trwaly" status dla naszego zapisu (IndexedDB +
+  // Cache Storage). Bez tego przegladarka (zwlaszcza Android przy malej
+  // ilosci wolnego miejsca) moze pod presja miejsca sama, bez ostrzezenia,
+  // wyczyscic cala baze urzadzenia - w tym plany budynkow i jeszcze
+  // niewyslane na serwer punkty/zdjecia z terenu. To tylko prosba (przegladarka
+  // moze odmowic), wiec brak efektu nie jest bledem - i tak nic tu nie da sie
+  // wiecej zrobic z poziomu appki.
+  try {
+    if (navigator.storage && navigator.storage.persist) {
+      const granted = await navigator.storage.persist();
+      console.log("[init] trwale przechowywanie danych:", granted ? "przyznane" : "odmowione/niedostepne");
+    }
+  } catch (err) {
+    console.error("[init] navigator.storage.persist:", err);
+  }
+
   let serviceLinkResult = "none";
   try {
     serviceLinkResult = await syncTryUrlServiceLogin();
@@ -3387,6 +3797,16 @@ async function syncApplyUiRestrictions() {
       "Ten link serwisowy jest nieprawidłowy, wygasł albo został odwołany. Poproś o nowy link.";
     startErrorDetails.textContent = "";
     startErrorBanner.classList.remove("hidden");
+  }
+
+  // Wczesniej niz w oryginalnym kodzie: musimy znac SERVICE_MODE PRZED
+  // loadBuildings()/loadInventory() (ponizej), zeby filtry Kosza/Archiwum
+  // (isMarkerActive itd.) nie dzialaly chwile na domyslnym "false", zanim
+  // syncApplyUiRestrictions rozstrzygnie to pozniej w tym samym init().
+  try {
+    SERVICE_MODE = await syncIsServiceMode();
+  } catch (err) {
+    console.error("[init] syncIsServiceMode:", err);
   }
 
   try {

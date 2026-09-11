@@ -27,7 +27,8 @@
 
 <header>
   <h1>OCHRONA_PPOŻ</h1>
-  <div class="controls">
+  <button type="button" id="header-controls-toggle" class="header-controls-toggle">Wybierz budynek/plan ▾</button>
+  <div class="controls collapsed" id="header-controls">
     <label>Budynek:
       <select id="building-select"></select>
     </label>
@@ -39,6 +40,7 @@
     <button class="tab-btn active" data-tab="map">Mapa</button>
     <button class="tab-btn" data-tab="inventory">Inwentaryzacja</button>
     <button class="tab-btn" data-tab="pomiary">Pomiary</button>
+    <button class="tab-btn" data-tab="permissions">Uprawnienia</button>
     <button class="tab-btn" data-tab="backup">Kopia zapasowa</button>
   </nav>
 </header>
@@ -47,40 +49,46 @@
   <section id="tab-map" class="tab-panel active">
     <div id="empty-state" class="hidden">
       <p>Brak wczytanych planów budynków.</p>
-      <p>Przejdź do zakładki <strong>Kopia zapasowa</strong> i wczytaj plik planów (np. plany-B1.json).</p>
+      <p id="empty-state-sync-status">Przejdź do zakładki <strong>Kopia zapasowa</strong> i wczytaj plik planów (np. plany-B1.json).</p>
     </div>
     <div id="map"></div>
-    <div id="map-filter-control" class="map-filter-control">
-      <label>Pokaż na mapie
-        <select id="map-layer-filter">
-          <option value="">Wszystkie warstwy</option>
-          <option value="inventory">Inwentaryzacja IBP</option>
-          <option value="delivery">DOSTAWY / poprawki</option>
-          <option value="renovation">Nadzór nad remontem</option>
-          <option value="security">Ochrona / kontrola nocna</option>
-        </select>
-      </label>
+    <div id="map-menu" class="map-menu">
+      <button type="button" id="map-menu-toggle" class="map-menu-toggle" title="Menu narzędzi mapy" aria-label="Menu narzędzi mapy">⋮</button>
+      <div id="map-menu-list" class="map-menu-list hidden">
+        <div class="map-menu-section">
+          <label class="palette-layer-select">Warstwa (stawianie)
+            <select id="placement-layer">
+              <option value="inventory">Inwentaryzacja IBP</option>
+              <option value="delivery">DOSTAWY / poprawki</option>
+              <option value="renovation">Nadzór nad remontem</option>
+              <option value="security">Ochrona / kontrola nocna</option>
+            </select>
+          </label>
+          <button type="button" id="symbol-palette-toggle" class="palette-toggle" title="Wybierz co stawiać na mapie po dotknięciu">
+            Stawiam: <span id="palette-current-label">Punkt</span>
+          </button>
+          <div id="symbol-palette-list" class="symbol-palette-list hidden"></div>
+        </div>
+        <hr>
+        <label class="map-menu-filter">Pokaż na mapie
+          <select id="map-layer-filter">
+            <option value="">Wszystkie warstwy</option>
+            <option value="inventory">Inwentaryzacja IBP</option>
+            <option value="delivery">DOSTAWY / poprawki</option>
+            <option value="renovation">Nadzór nad remontem</option>
+            <option value="security">Ochrona / kontrola nocna</option>
+          </select>
+        </label>
+        <button type="button" id="locate-btn" class="secondary map-menu-btn" title="Zgadnij budynek na podstawie GPS">📍 Gdzie jestem?</button>
+        <button type="button" id="calibrate-btn" class="hidden secondary map-menu-btn" title="Skalibruj skalę tego planu, żeby pomiary liczyły metry">Kalibruj skalę</button>
+        <button type="button" id="rotate-left-btn" class="hidden secondary map-menu-btn" title="Obróć plan o 90° w lewo (punkty i pomiary też się przesuną)">↺ Obróć plan w lewo</button>
+        <button type="button" id="rotate-right-btn" class="hidden secondary map-menu-btn" title="Obróć plan o 90° w prawo (punkty i pomiary też się przesuną)">↻ Obróć plan w prawo</button>
+      </div>
     </div>
-    <div id="symbol-palette" class="symbol-palette">
-      <label class="palette-layer-select">Warstwa
-        <select id="placement-layer">
-          <option value="inventory">Inwentaryzacja IBP</option>
-          <option value="delivery">DOSTAWY / poprawki</option>
-          <option value="renovation">Nadzór nad remontem</option>
-          <option value="security">Ochrona / kontrola nocna</option>
-        </select>
-      </label>
-      <button type="button" id="symbol-palette-toggle" class="palette-toggle" title="Wybierz co stawiać na mapie po dotknięciu">
-        Stawiam: <span id="palette-current-label">Punkt</span>
-      </button>
-      <div id="symbol-palette-list" class="symbol-palette-list hidden"></div>
-    </div>
-    <div class="fab-stack">
-      <button id="locate-btn" class="fab secondary" title="Zgadnij budynek na podstawie GPS">📍 Gdzie jestem?</button>
-      <button id="calibrate-btn" class="fab hidden secondary" title="Skalibruj skalę tego planu, żeby pomiary liczyły metry">Kalibruj skalę</button>
-      <button id="rotate-left-btn" class="fab hidden secondary" title="Obróć plan o 90° w lewo (punkty i pomiary też się przesuną)">↺ Obróć plan</button>
-      <button id="rotate-right-btn" class="fab hidden secondary" title="Obróć plan o 90° w prawo (punkty i pomiary też się przesuną)">↻ Obróć plan</button>
-      <button id="report-btn" class="fab hidden" title="Raport tego rzutu (PDF)">Raport</button>
+    <div id="locate-candidates-panel" class="hidden">
+      <h3>Pobliskie budynki</h3>
+      <div id="locate-candidates-list"></div>
+      <button type="button" id="locate-candidates-close" class="secondary">Zamknij</button>
     </div>
     <div id="marker-panel" class="hidden">
       <h3 id="marker-panel-title">Punkt</h3>
@@ -129,6 +137,7 @@
       <p class="save-status" id="save-status">Zapisano</p>
       <div class="marker-panel-actions">
         <button id="marker-delete" class="danger">Usuń punkt</button>
+        <button id="marker-archive" class="secondary">Archiwizuj</button>
         <button id="marker-close" class="secondary">Zamknij</button>
       </div>
     </div>
@@ -176,6 +185,13 @@
           <option value="done">Załatwione</option>
         </select>
       </label>
+      <label>Widok:
+        <select id="inventory-lifecycle-filter">
+          <option value="">Aktywne</option>
+          <option value="trash">Kosz</option>
+          <option value="archive">Archiwum</option>
+        </select>
+      </label>
       <label>Warstwa:
         <select id="inventory-layer-filter">
           <option value="">Wszystkie</option>
@@ -191,6 +207,7 @@
         </select>
       </label>
       <a id="export-csv-link" href="#">Eksportuj CSV</a>
+      <button id="report-btn" class="secondary hidden" type="button" title="Raport bieżącego rzutu (wybranego w zakładce Mapa) w PDF">Raport bieżącego rzutu (PDF)</button>
       <button id="full-report-btn" class="secondary" type="button">Raport zbiorczy PDF (czujki + ochrona)</button>
       <button id="work-report-btn" type="button">Draft raportu zadań</button>
     </div>
@@ -242,6 +259,50 @@
       </thead>
       <tbody></tbody>
     </table>
+  </section>
+
+  <section id="tab-permissions" class="tab-panel">
+    <div class="backup-panel">
+      <p id="permissions-trash-size-banner" class="hidden"></p>
+      <h2>Administratorzy</h2>
+      <p>Konta z pełnym dostępem (logowanie e-mail + hasło). Usunięcie konta z tego urządzenia
+        nie kasuje danych — trafia do Kosza uprawnień niżej i można je stamtąd przywrócić.</p>
+      <div id="owner-devices-list"></div>
+    </div>
+
+    <div class="backup-panel" id="service-links-panel">
+      <h2>Linki dla serwisantów</h2>
+      <p>
+        Osobny link, bez logowania — po otwarciu serwisant widzi tylko wybraną kategorię (nie Twoje
+        notatki), nie ma dostępu do pomiarów ani kopii zapasowej, i może tylko dodawać punkty (zdjęcie
+        + notatka co jest do zrobienia). Możesz go wyłączyć w każdej chwili.
+      </p>
+      <label>Etykieta (np. nazwa firmy)
+        <input type="text" id="service-link-label" placeholder="np. Serwis gaśnic - wrzesień 2026">
+      </label>
+      <label>Kategoria, którą serwisant będzie widział i nanosił
+        <input type="text" id="service-link-category" value="SERWIS">
+      </label>
+      <label>Ważność w dniach (puste = bez limitu, można odwołać ręcznie)
+        <input type="number" id="service-link-expires" placeholder="np. 30" min="1" max="365">
+      </label>
+      <button id="service-link-create-btn" type="button">Utwórz link</button>
+      <p id="service-link-result"></p>
+      <div id="service-links-list"></div>
+    </div>
+
+    <div class="backup-panel" id="pending-requests-panel">
+      <h2>Prośby serwisu</h2>
+      <p>Gdy serwis zgłosi usunięcie/archiwizację punktu, u niego znika to od razu, ale u Ciebie
+        punkt zostaje w pełni aktywny, dopóki nie zatwierdzisz albo odrzucisz prośby tutaj.</p>
+      <div id="pending-requests-list"></div>
+    </div>
+
+    <div class="backup-panel">
+      <h2>Kosz uprawnień</h2>
+      <p>Odwołane konta i linki serwisowe — można je stąd przywrócić w każdej chwili.</p>
+      <div id="permissions-trash-list"></div>
+    </div>
   </section>
 
   <section id="tab-backup" class="tab-panel">
@@ -336,27 +397,6 @@
         <h3 id="sync-conflicts-title">Konflikty do przejrzenia</h3>
         <div id="sync-conflicts-list"></div>
       </div>
-    </div>
-
-    <div class="backup-panel" id="service-links-panel">
-      <h2>Linki dla serwisantów</h2>
-      <p>
-        Osobny link, bez logowania — po otwarciu serwisant widzi tylko wybraną kategorię (nie Twoje
-        notatki), nie ma dostępu do pomiarów ani kopii zapasowej, i może tylko dodawać punkty (zdjęcie
-        + notatka co jest do zrobienia). Możesz go wyłączyć w każdej chwili.
-      </p>
-      <label>Etykieta (np. nazwa firmy)
-        <input type="text" id="service-link-label" placeholder="np. Serwis gaśnic - wrzesień 2026">
-      </label>
-      <label>Kategoria, którą serwisant będzie widział i nanosił
-        <input type="text" id="service-link-category" value="SERWIS">
-      </label>
-      <label>Ważność w dniach (puste = bez limitu, można odwołać ręcznie)
-        <input type="number" id="service-link-expires" placeholder="np. 30" min="1" max="365">
-      </label>
-      <button id="service-link-create-btn" type="button">Utwórz link</button>
-      <p id="service-link-result"></p>
-      <div id="service-links-list"></div>
     </div>
 
     <div class="backup-panel">

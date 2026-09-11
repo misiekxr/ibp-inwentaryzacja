@@ -94,6 +94,19 @@ header h1 {
   margin: 0 0 8px 0;
 }
 
+.header-controls-toggle {
+  display: none; /* pokazywany tylko na waskich ekranach - patrz media query nizej */
+  width: 100%;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  font: inherit;
+  color: var(--text);
+}
+
 .controls {
   display: flex;
   gap: 16px;
@@ -182,42 +195,62 @@ main {
 
 #empty-state.hidden { display: none; }
 
-.fab-stack {
-  position: absolute;
-  left: 12px;
-  bottom: 12px;
-  z-index: 900;
-  display: flex;
-  flex-direction: column-reverse;
-  gap: 8px;
-  align-items: flex-start;
-}
-
-.fab {
-  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-}
-
-.symbol-palette {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  z-index: 900;
-}
-
-.map-filter-control {
+/* Wszystkie dawniej osobne pływające elementy nad mapą (paleta symboli,
+   filtr warstw, stos przycisków fab, natywny zoom Leaflet) zeszły do jednego
+   wspólnego, domyślnie zwiniętego menu - inaczej na telefonie zasłaniały plan. */
+.map-menu {
   position: absolute;
   top: 8px;
   right: 8px;
-  z-index: 900;
+  z-index: 950;
+}
+
+.map-menu-toggle {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.3rem;
+  line-height: 1;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.map-menu-list {
+  position: absolute;
+  top: 46px;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 240px;
+  max-width: calc(100vw - 32px);
+  max-height: 70vh;
+  overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 6px 10px;
-  font-size: 0.8rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  padding: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
 }
-.map-filter-control label { display: flex; flex-direction: column; gap: 2px; }
-.map-filter-control select { font: inherit; }
+
+.map-menu-list.hidden { display: none; }
+
+.map-menu-list hr {
+  width: 100%;
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}
+
+.map-menu-section { display: flex; flex-direction: column; gap: 8px; }
+
+.map-menu-filter { display: flex; flex-direction: column; gap: 2px; font-size: 0.85rem; color: var(--muted); }
+.map-menu-filter select { font: inherit; }
+
+.map-menu-btn { width: 100%; text-align: left; }
 
 .palette-toggle {
   background: var(--panel);
@@ -347,6 +380,25 @@ main {
 
 #marker-panel.hidden, #measure-panel.hidden { display: none; }
 
+#locate-candidates-panel {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 260px;
+  max-width: calc(100vw - 32px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  z-index: 1100;
+}
+
+#locate-candidates-panel.hidden { display: none; }
+#locate-candidates-panel h3 { margin: 0 0 8px 0; font-size: 1rem; }
+.locate-candidate-item { display: block; width: 100%; text-align: left; margin-bottom: 6px; }
+
 #marker-panel h3, #measure-panel h3 { margin: 0 0 4px 0; font-size: 0.95rem; }
 #marker-panel label, #measure-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: var(--muted); }
 
@@ -459,6 +511,12 @@ main {
 .status-chip.done {
   background: #dcfce7;
   color: #166534;
+}
+
+.status-chip.pending {
+  background: #fef3c7;
+  color: #92400e;
+  margin-left: 4px;
 }
 
 .save-status {
@@ -680,6 +738,13 @@ table .thumb {
     padding: 10px 12px;
     font-size: 0.95rem;
   }
+
+  /* Pasek Budynek/Plan zwinięty domyślnie na telefonie (zwalnia miejsce nad
+     mapą) - stuknięcie w podsumowanie rozwija pełne listy wyboru. Na
+     desktopie ta reguła w ogóle nie obowiązuje (poza tym media query), więc
+     .controls zawsze zostaje widoczny tam bez zmian. */
+  .header-controls-toggle { display: block; }
+  .controls.collapsed { display: none; }
 }
 
 .marker-panel-actions {

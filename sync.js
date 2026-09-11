@@ -232,6 +232,17 @@ async function syncEnqueueDelete(type, id, buildingCode, baseUpdatedAt) {
   syncTryFlush();
 }
 
+// Kosz/Archiwum wydarzen + workflow zatwierdzania serwisu (patrz
+// performMarkerLifecycleAction w app.js) - osobny "rodzaj" wpisu w TEJ SAMEJ
+// kolejce syncQueue (klucz "action:<id>", nie koliduje z "marker:<id>" powyzej,
+// wiec oba moga czekac jednoczesnie), zeby zadarmo dziedziczyc caly istniejacy
+// mechanizm retry/offline (syncTryFlush, wyzwalacze online/visibilitychange/60s).
+async function syncEnqueueMarkerAction(recordId, action) {
+  const db = await dbPromise;
+  await db.put("syncQueue", { key: `action:${recordId}`, kind: "action", recordId, action });
+  syncTryFlush();
+}
+
 async function syncEnqueuePhoto(markerId, photoId) {
   const db = await dbPromise;
   await db.put("syncQueue", { key: `photo:${photoId}`, type: "photo", id: photoId, markerId });
@@ -265,7 +276,8 @@ async function syncTryFlush() {
     const items = await db.getAll("syncQueue");
     for (const item of items) {
       try {
-        if (item.type === "photo") await syncPushPhoto(cfg, item);
+        if (item.kind === "action") await syncPushAction(cfg, item);
+        else if (item.type === "photo") await syncPushPhoto(cfg, item);
         else if (item.type === "plan") await syncPushPlan(cfg, item);
         else await syncPushRecord(cfg, item);
       } catch (err) {
@@ -324,11 +336,55 @@ async function syncPushRecord(cfg, item) {
     return;
   }
 
+  if (result.status !== "ok") {
+    // 'invalid'/'forbidden' (i przyszle 'locked') - serwer ODRZUCIL zmiane, to
+    // NIE jest sukces. Wczesniej ten przypadek po cichu spadal do usuniecia
+    // z kolejki ponizej, wygladajac jak wyslane, mimo ze serwer nic nie zapisal -
+    // pokazujemy to w istniejacym UI konfliktow zamiast cichego znikniecia.
+    console.error("[sync] serwer odrzucil zmiane:", item.type, item.id, result.status);
+    const local = item.deleted ? null : await db.get(store, item.id);
+    await syncStoreConflict(item.type, item.id, item.buildingCode, local, null, null, false);
+    await db.delete("syncQueue", item.key);
+    return;
+  }
+
   if (!item.deleted) {
     const record = await db.get(store, item.id);
     if (record) await db.put(store, { ...record, _syncUpdatedAt: result.server_updated_at });
   }
   await db.delete("syncQueue", item.key);
+}
+
+// Kosz/Archiwum + zatwierdzanie serwisu - patrz syncEnqueueMarkerAction.
+const MARKER_ACTION_ENDPOINT = {
+  "request-delete": "request-delete",
+  "request-archive": "request-archive",
+  "cancel-request": "cancel-request",
+  approve: "approve",
+  reject: "reject",
+  delete: "delete",
+  archive: "archive",
+  restore: "restore",
+};
+
+async function syncPushAction(cfg, item) {
+  const db = await dbPromise;
+  const endpoint = MARKER_ACTION_ENDPOINT[item.action];
+  if (!endpoint) {
+    await db.delete("syncQueue", item.key);
+    return;
+  }
+  const res = await fetch(`${cfg.serverUrl}/api/markers/${item.recordId}/${endpoint}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${cfg.token}` },
+  });
+  if (!res.ok && res.status !== 404 && res.status !== 409) return; // siec/serwer - zostaw w kolejce, sprobuj pozniej
+  // 404 (marker juz nie istnieje) / 409 (akcja juz rozstrzygnieta przez kogos
+  // innego, np. admin zdazyl zatwierdzic zanim doszlo tu "cofnij prosbe") sa
+  // KONCOWE, nie do ponowienia - porzucamy wpis, kolejny pull() sprowadzi
+  // prawdziwy stan.
+  await db.delete("syncQueue", item.key);
+  syncPull();
 }
 
 async function syncPushPhoto(cfg, item) {
@@ -560,6 +616,13 @@ function syncBuildConflictBox(c) {
 function syncSetProgress(text) {
   const el = document.getElementById("sync-status-info");
   if (el) el.textContent = text;
+  // Ten sam komunikat tez na ekranie "brak planów" (zakladka Mapa) - to tam
+  // uzytkownik faktycznie patrzy przy pierwszym uruchomieniu, nie w ukrytej
+  // wtedy zakladce Kopia zapasowa. Element jest niewidoczny, dopoki
+  // #empty-state ma klase "hidden", wiec nadpisywanie go tutaj jest
+  // nieszkodliwe rowniez wtedy, gdy plany sa juz wczytane.
+  const hint = document.getElementById("empty-state-sync-status");
+  if (hint) hint.textContent = text;
 }
 
 // Bez tej blokady kilka wyzwalaczy pull-a (login, powrot online, powrot do
@@ -626,22 +689,38 @@ async function syncApplyRemoteRecord(item) {
     return;
   }
 
-  if (item.deleted) {
-    await db.delete(store, item.id);
+  if (item.type !== "marker") {
+    // pomiary/typy symboli: bez Kosza/Archiwum, zachowanie bez zmian.
+    if (item.deleted) {
+      await db.delete(store, item.id);
+      return;
+    }
+    const record = { ...item.data, id: item.id, _syncUpdatedAt: item.updated_at, _updatedByDeviceName: item.updated_by_device_name || null };
+    await db.put(store, record);
     return;
   }
 
+  // Markery: usuniecie/archiwizacja to teraz STATUS na rekordzie, nie
+  // zniknięcie - inaczej Kosz/Archiwum nie mialyby czego pokazac. Wyjatek:
+  // "porzucony pusty szkic" (patrz closeMarkerPanel w app.js) nadal idzie
+  // starym, generycznym mechanizmem push z deleted:true - to jedyny przypadek,
+  // w ktorym prawdziwe znikniecie tutaj jest poprawne.
+  const existing = await db.get(store, item.id);
   const record = {
+    ...(existing || {}),
     ...item.data,
     id: item.id,
+    buildingCode: item.building_code,
+    deletedAt: item.deleted ? item.updated_at : null,
+    archivedAt: item.archived ? item.updated_at : null,
+    pendingAction: item.pending_action || null,
+    pendingByDeviceName: item.pending_by_device_name || null,
+    pendingAt: item.pending_at || null,
     _syncUpdatedAt: item.updated_at,
     _updatedByDeviceName: item.updated_by_device_name || null,
+    photos: (existing && existing.photos) || [],
   };
-  if (store === "markers") {
-    if (!record.planKey) record.planKey = planKeyOf(record.buildingCode, record.planFile);
-    const existing = await db.get(store, item.id);
-    record.photos = (existing && existing.photos) || [];
-  }
+  if (!record.planKey) record.planKey = planKeyOf(record.buildingCode, record.planFile);
   await db.put(store, record);
 }
 
@@ -660,7 +739,16 @@ async function syncPullPlans(cfg) {
       if (!p.deleted && p.file_key) {
         done++;
         syncSetProgress(`Pobieram plany budynków… (${done})`);
-        await syncFetchAndStorePlan(cfg, p);
+        const ok = await syncFetchAndStorePlan(cfg, p);
+        // Nie przesuwamy kursora za nieudany pobór (np. polaczenie padlo w
+        // trakcie sciagania duzego pliku planu) - inaczej ten plan zostalby
+        // pominiety NA ZAWSZE, bo kazda kolejna proba zaczynalaby sie juz za
+        // nim. Zamiast tego przerywamy caly pull teraz; kolejna proba (powrot
+        // online, powrot do appki, timer co 60s albo "Synchronizuj teraz")
+        // zacznie od tego samego "since" i powtorzy caly pakiet - plany juz
+        // zapisane lokalnie w tym przebiegu pomija blyskawicznie (sa juz pod
+        // tym samym kluczem), wiec nic nie sciaga sie dwa razy.
+        if (!ok) return;
       }
     }
     since = body.next_since;
@@ -670,24 +758,34 @@ async function syncPullPlans(cfg) {
   if (typeof loadBuildings === "function") await loadBuildings();
 }
 
+// Zwraca true, jesli plan jest juz bezpiecznie zapisany lokalnie (byl juz
+// wczesniej albo wlasnie go zapisalismy), false przy jakimkolwiek bledzie
+// sieci/serwera - patrz komentarz w syncPullPlans o tym, dlaczego to rozroznienie
+// jest wazne (decyduje, czy wolno przesunac kursor pobierania dalej).
 async function syncFetchAndStorePlan(cfg, p) {
   const db = await dbPromise;
   const key = planKeyOf(p.building_code, p.file_key);
   const existing = await db.get("planImages", key);
-  if (existing) return; // juz mamy ten plan lokalnie pod tym samym kluczem
+  if (existing) return true; // juz mamy ten plan lokalnie pod tym samym kluczem
 
-  const res = await fetch(`${cfg.serverUrl}/api/plans/${p.id}/image`, { headers: { Authorization: `Bearer ${cfg.token}` } });
-  if (!res.ok) return;
-  const blob = await res.blob();
-  await dbPutPlanImagePreserveScale({
-    key,
-    buildingCode: p.building_code,
-    buildingName: p.building_code,
-    file: p.file_key,
-    name: p.name,
-    sortOrder: p.sort_order,
-    blob,
-  });
+  try {
+    const res = await fetch(`${cfg.serverUrl}/api/plans/${p.id}/image`, { headers: { Authorization: `Bearer ${cfg.token}` } });
+    if (!res.ok) return false;
+    const blob = await res.blob();
+    await dbPutPlanImagePreserveScale({
+      key,
+      buildingCode: p.building_code,
+      buildingName: p.building_code,
+      file: p.file_key,
+      name: p.name,
+      sortOrder: p.sort_order,
+      blob,
+    });
+    return true;
+  } catch (err) {
+    console.error("[sync] pobranie planu nie powiodlo sie:", p.building_code, p.file_key, err);
+    return false;
+  }
 }
 
 async function syncPullPhotosMeta(cfg) {
@@ -705,7 +803,13 @@ async function syncPullPhotosMeta(cfg) {
       if (!p.deleted) {
         done++;
         syncSetProgress(`Pobieram zdjęcia… (${done})`);
-        await syncFetchAndAttachPhoto(cfg, p);
+        const ok = await syncFetchAndAttachPhoto(cfg, p);
+        // Jak w syncPullPlans: bez tego kazde zdjecie, ktorego nie udalo sie
+        // pobrac (padla siec w trakcie, albo marker jeszcze nie dotarl przez
+        // inna kolejnosc synchronizacji) zostalby pominiety na zawsze, mimo
+        // ze komentarz nizej mowil "dogonimy przy nastepnym pull" - bez tego
+        // przerwania to nigdy sie nie dzialo, bo kursor byl juz za nim.
+        if (!ok) return;
       }
     }
     since = body.next_since;
@@ -714,20 +818,28 @@ async function syncPullPhotosMeta(cfg) {
   }
 }
 
+// Jak syncFetchAndStorePlan: true = bezpiecznie zapisane/juz obecne, false =
+// trzeba powtorzyc przy kolejnym pull (patrz syncPullPhotosMeta).
 async function syncFetchAndAttachPhoto(cfg, p) {
   const db = await dbPromise;
   const marker = await db.get("markers", p.record_id);
-  if (!marker) return; // marker jeszcze nie dotarl (np. inna kolejnosc synchronizacji) - dogonimy przy nastepnym pull
-  if ((marker.photos || []).some((ph) => ph.id === p.id)) return;
+  if (!marker) return false; // marker jeszcze nie dotarl (np. inna kolejnosc synchronizacji) - dogonimy przy nastepnym pull
+  if ((marker.photos || []).some((ph) => ph.id === p.id)) return true;
 
-  const res = await fetch(`${cfg.serverUrl}/api/photos/${p.id}`, { headers: { Authorization: `Bearer ${cfg.token}` } });
-  if (!res.ok) return;
-  const blob = await res.blob();
+  try {
+    const res = await fetch(`${cfg.serverUrl}/api/photos/${p.id}`, { headers: { Authorization: `Bearer ${cfg.token}` } });
+    if (!res.ok) return false;
+    const blob = await res.blob();
 
-  const fresh = await db.get("markers", p.record_id);
-  if (!fresh) return;
-  const photos = [...(fresh.photos || []), { id: p.id, blob, type: p.content_type, addedAt: p.updated_at, synced: true }];
-  await db.put("markers", { ...fresh, photos });
+    const fresh = await db.get("markers", p.record_id);
+    if (!fresh) return false;
+    const photos = [...(fresh.photos || []), { id: p.id, blob, type: p.content_type, addedAt: p.updated_at, synced: true }];
+    await db.put("markers", { ...fresh, photos });
+    return true;
+  } catch (err) {
+    console.error("[sync] pobranie zdjecia nie powiodlo sie:", p.id, err);
+    return false;
+  }
 }
 
 // --- Status / UI ---
@@ -866,6 +978,34 @@ async function syncRevokeServiceLink(id) {
   if (!syncIsLoggedIn(cfg)) return;
   await fetch(`${cfg.serverUrl}/api/devices/${id}`, {
     method: "DELETE",
+    headers: { Authorization: `Bearer ${cfg.token}` },
+  });
+}
+
+// --- Zakladka Uprawnienia: konta-wlasciciele (GET /api/devices istnieje od
+// dawna po stronie serwera, ale do tej pory PWA go nie wywolywalo w ogole -
+// tylko linki serwisowe mialy swoj widok) + Kosz uprawnien (Przywroc). ---
+
+// Zwraca tez current_device_id (juz dawno zwracane przez serwer, ale nigdy
+// dotad nie uzywane) - zeby UI moglo oznaczyc/zablokowac usuniecie WLASNEGO,
+// aktualnie uzywanego urzadzenia (natychmiastowe wylogowanie samego siebie).
+async function syncListOwnerDevices() {
+  const cfg = await syncGetConfig();
+  if (!syncIsLoggedIn(cfg)) return { devices: [], currentDeviceId: null };
+  const res = await fetch(`${cfg.serverUrl}/api/devices`, { headers: { Authorization: `Bearer ${cfg.token}` } });
+  if (!res.ok) return { devices: [], currentDeviceId: null };
+  const body = await res.json();
+  return { devices: body.devices || [], currentDeviceId: body.current_device_id || null };
+}
+
+// Wspolna dla obu typow wierszy w zakladce Uprawnienia (konto-wlasciciel i
+// link serwisowy) - to ten sam mechanizm co syncRevokeServiceLink, tylko z
+// druga strona (przywroc zamiast odwolaj).
+async function syncRestoreDevice(id) {
+  const cfg = await syncGetConfig();
+  if (!syncIsLoggedIn(cfg)) return;
+  await fetch(`${cfg.serverUrl}/api/devices/${id}/restore`, {
+    method: "POST",
     headers: { Authorization: `Bearer ${cfg.token}` },
   });
 }
