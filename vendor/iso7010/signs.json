@@ -1,0 +1,122 @@
+[
+  {
+    "code": "E001",
+    "name": "Wyjście ewakuacyjne (lewostronne)",
+    "description": "Kwadrat lub prostokąt, zielone tło, biały piktogram. Przedstawia stylizowanego człowieka przemieszczającego się w lewo przez otwór drzwiowy."
+  },
+  {
+    "code": "E002",
+    "name": "Wyjście ewakuacyjne (prawostronne)",
+    "description": "Kwadrat lub prostokąt, zielone tło, biały piktogram. Przedstawia stylizowanego człowieka przemieszczającego się w prawo przez otwór drzwiowy."
+  },
+  {
+    "code": "E003",
+    "name": "Pierwsza pomoc medyczna",
+    "description": "Kwadrat, zielone tło, biały piktogram. Przedstawia krzyż (pierwszej pomocy)."
+  },
+  {
+    "code": "E007",
+    "name": "Miejsce zbiórki do ewakuacji",
+    "description": "Kwadrat, zielone tło, biały piktogram. Przedstawia dwoje stylizowanych ludzi i głowę trzeciego w grupie oraz cztery strzałki skierowane do środka."
+  },
+  {
+    "code": "E008",
+    "name": "Stłuc, aby uzyskać dostęp",
+    "description": "Kwadrat, zielone tło, biały piktogram. Przedstawia pięść z przedramieniem uderzającą w powierzchnię (pęknięcie/rozbłysk)."
+  },
+  {
+    "code": "E010",
+    "name": "Defibrylator",
+    "description": "Kwadrat, zielone tło, biały piktogram. Przedstawia serce z błyskawicą w środku i krzyż pierwszej pomocy."
+  },
+  {
+    "code": "E016",
+    "name": "Okno ewakuacyjne z drabiną ewakuacyjną",
+    "description": "Kwadrat, zielone tło, biały piktogram. Przedstawia stylizowanego człowieka wychodzącego przez okno na drabinę."
+  },
+  {
+    "code": "E017",
+    "name": "Okno ratunkowe",
+    "description": "Kwadrat, zielone tło, biały piktogram. Przedstawia człowieka, okno oraz wóz strażacki z wysuniętą drabiną."
+  },
+  {
+    "code": "F001",
+    "name": "Gaśnica",
+    "description": "Kwadrat, czerwone tło, biały piktogram. Przedstawia gaśnicę i płomienie z prawej strony."
+  },
+  {
+    "code": "F002",
+    "name": "Hydrant wewnętrzny",
+    "description": "Kwadrat, czerwone tło, biały piktogram. Przedstawia bęben z wężem pożarniczym, prądownicę i płomienie."
+  },
+  {
+    "code": "F003",
+    "name": "Drabina pożarowa",
+    "description": "Kwadrat, czerwone tło, biały piktogram. Przedstawia drabinę i płomienie po prawej stronie."
+  },
+  {
+    "code": "F004",
+    "name": "Zestaw sprzętu ochrony przeciwpożarowej",
+    "description": "Kwadrat, czerwone tło, biały piktogram. Przedstawia hełm strażacki z profilu i płomienie."
+  },
+  {
+    "code": "F005",
+    "name": "Alarm pożarowy",
+    "description": "Kwadrat, czerwone tło, biały piktogram. Przedstawia dłoń wciskającą przycisk alarmowy (ROP) i płomienie."
+  },
+  {
+    "code": "F006",
+    "name": "Telefon alarmowania pożarowego",
+    "description": "Kwadrat, czerwone tło, biały piktogram. Przedstawia słuchawkę telefonu i płomienie."
+  },
+  {
+    "code": "M001",
+    "name": "Ogólny znak nakazu",
+    "description": "Koło, niebieskie tło, biały piktogram. Przedstawia wykrzyknik."
+  },
+  {
+    "code": "M002",
+    "name": "Przeczytaj instrukcję",
+    "description": "Koło, niebieskie tło, biały piktogram. Przedstawia postać czytającą otwartą książkę/instrukcję."
+  },
+  {
+    "code": "M003",
+    "name": "Nakaz stosowania ochrony słuchu",
+    "description": "Koło, niebieskie tło, biały piktogram. Przedstawia głowę z założonymi nausznikami ochronnymi."
+  },
+  {
+    "code": "M004",
+    "name": "Nakaz stosowania ochrony oczu",
+    "description": "Koło, niebieskie tło, biały piktogram. Przedstawia głowę z założonymi okularami ochronnymi."
+  },
+  {
+    "code": "P001",
+    "name": "Ogólny znak zakazu",
+    "description": "Koło, białe tło, czerwona gruba obwódka i ukośne przekreślenie. Brak piktogramu wewnątrz."
+  },
+  {
+    "code": "P002",
+    "name": "Zakaz palenia tytoniu",
+    "description": "Koło, białe tło, czerwona obwódka i przekreślenie, czarny piktogram. Przedstawia tlącego się papierosa."
+  },
+  {
+    "code": "P003",
+    "name": "Zakaz używania otwartego ognia - Palenie tytoniu zabronione",
+    "description": "Koło, białe tło, czerwona obwódka i przekreślenie, czarny piktogram. Przedstawia zapaloną zapałkę."
+  },
+  {
+    "code": "W001",
+    "name": "Ogólny znak ostrzegawczy",
+    "description": "Trójkąt równoboczny, żółte tło, czarna obwódka, czarny piktogram. Przedstawia wykrzyknik."
+  },
+  {
+    "code": "W002",
+    "name": "Niebezpieczeństwo wybuchu - Materiały wybuchowe",
+    "description": "Trójkąt, żółte tło, czarna obwódka i piktogram. Przedstawia eksplodującą bombę."
+  },
+  {
+    "code": "W003",
+    "name": "Ostrzeżenie przed materiałem radioaktywnym lub promieniowaniem jonizującym",
+    "description": "Trójkąt, żółte tło, czarna obwódka i piktogram. Przedstawia symbol koniczyny radioaktywnej (trefoil)."
+  }
+]
