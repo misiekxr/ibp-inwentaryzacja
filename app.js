@@ -1114,7 +1114,7 @@ function loadImageDimensions(url) {
 async function selectPlan(buildingCode, file, name) {
   updateHeaderControlsSummary();
   headerControls.classList.add("collapsed"); // bez efektu na desktopie - patrz media query w style.css
-  await closeMarkerPanel();
+  await closeMarkerPanel(false); // nigdy nie kasuj "pustego" punktu przy programowym przeladowaniu - patrz komentarz w closeMarkerPanel
   // Kalibracja (2 stukniecia) jest przywiazana do jednego, konkretnego planu -
   // zmiana planu/budynku w trakcie musi ja anulowac, inaczej punkt 1. sprzed
   // zmiany i punkt 2. po zmianie policzylyby bezsensowna, fikcyjna odleglosc.
@@ -1940,9 +1940,15 @@ symbolMirrorBtn.addEventListener("click", async () => {
   await updateSymbolTransform({ mirrored: !m.mirrored });
 });
 
-async function closeMarkerPanel() {
+// pruneIfEmpty=false przy zamknieciu wywolanym PROGRAMOWO (np. selectPlan()
+// resetujacy widok po tle synchronizacji, patrz komentarz tam) - "pusty punkt"
+// bez notatki/zdjecia moze byc po prostu w trakcie wpisywania przez
+// uzytkownika w chwili, gdy cos w tle akurat przeladowalo plan. Kasowanie
+// "pustych" punktow ma sens WYLACZNIE przy prawdziwym zamknieciu przez
+// uzytkownika (przycisk "Zamknij"), gdzie faktycznie porzucil edycje.
+async function closeMarkerPanel(pruneIfEmpty = true) {
   if (editingMarkerId != null) {
-    const m = await dbGetMarker(editingMarkerId);
+    const m = pruneIfEmpty ? await dbGetMarker(editingMarkerId) : null;
     // porzadek: pusty punkt (bez notatki i zdjecia) usuwamy, zeby przypadkowe
     // tapniecie na mape nie zostawialo "widmowych" pinezek - ale NIE dotyczy to
     // symboli (drzwi/gasnica/hydrant), ktore sa uzyteczne samą swoja obecnoscia
@@ -3461,7 +3467,15 @@ async function prepareNewPlanFile(file) {
         statusPrefix = `Uwaga: PDF ma ${pdf.numPages} stron, użyto tylko strony 1. `;
       }
     } else {
-      pendingPlanBlob = file;
+      // Zdjecie z aparatu telefonu w pelnej rozdzielczosci potrafi miec
+      // kilkanascie-kilkadziesiat MB - dokladnie ten sam powod co przy
+      // zdjeciach do notatek (patrz compressImage) - tu dodatkowo taki plik
+      // i tak przekroczylby limit rozmiaru planu na serwerze (max_plan_bytes,
+      // domyslnie 20 MB), wiec wgranie z telefonu konczylo sie cichym,
+      // wiecznie ponawianym niepowodzeniem w kolejce wysylki. Wiekszy wymiar
+      // niz przy zdjeciach do notatek (2400 vs 1600) - to rzut budynku, ma
+      // zostac czytelny po przybliżeniu.
+      pendingPlanBlob = await compressImage(file, 2400, 0.85);
     }
 
     if (!planAddCode.value.trim()) {
@@ -3531,12 +3545,6 @@ planAddSubmitBtn.addEventListener("click", async () => {
 planAddCamera.addEventListener("change", async () => {
   const file = planAddCamera.files[0];
   planAddCamera.value = "";
-  if (file) await prepareNewPlanFile(file);
-});
-
-planAddFile.addEventListener("change", async () => {
-  const file = planAddFile.files[0];
-  planAddFile.value = "";
   if (file) await prepareNewPlanFile(file);
 });
 

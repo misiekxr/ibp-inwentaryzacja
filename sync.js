@@ -755,7 +755,13 @@ async function syncPullPlans(cfg) {
     hasMore = body.has_more;
     await dbSetMeta("syncPlansCursor", since);
   }
-  if (typeof loadBuildings === "function") await loadBuildings();
+  // Tylko gdy faktycznie cos przyszlo (done > 0) - inaczej to walalo
+  // bezwarunkowo po KAZDYM tiku synchronizacji (co 60s/online/powrot do karty),
+  // co w loadBuildings()->loadPlans()->selectPlan() zamykalo panel edytowanego
+  // punktu (i mogloby go skasowac jako "pusty", jesli notatka/zdjecie jeszcze
+  // sie nie zdazyly zapisac) oraz resetowalo widok mapy - w trakcie zwyklego
+  // wpisywania notatki albo dodawania kilku zdjec pod rzad.
+  if (done > 0 && typeof loadBuildings === "function") await loadBuildings();
 }
 
 // Zwraca true, jesli plan jest juz bezpiecznie zapisany lokalnie (byl juz
