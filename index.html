@@ -470,6 +470,39 @@
   </div>
 </div>
 
+<div id="event-edit-modal" class="hidden">
+  <div class="value-modal-box">
+    <h3>Edytuj zdarzenie</h3>
+    <label>Kategoria
+      <select id="event-edit-category"></select>
+    </label>
+    <label>Warstwa
+      <select id="event-edit-layer">
+        <option value="delivery">DOSTAWA</option>
+        <option value="inventory">Inwentaryzacja IBP</option>
+        <optgroup label="Sprawy Ppoż.">
+          <option value="renovation">Nadzór nad remontem</option>
+          <option value="security">Ochrona / kontrola nocna</option>
+        </optgroup>
+      </select>
+    </label>
+    <label class="status-toggle"><input type="checkbox" id="event-edit-done"> Załatwione</label>
+    <label>Termin
+      <input type="date" id="event-edit-due-date">
+    </label>
+    <label>Data kontroli
+      <input type="date" id="event-edit-review-date">
+    </label>
+    <label>Notatka
+      <textarea id="event-edit-note" rows="3"></textarea>
+    </label>
+    <div class="marker-panel-actions">
+      <button type="button" id="event-edit-save">Zapisz</button>
+      <button type="button" id="event-edit-cancel" class="secondary">Anuluj</button>
+    </div>
+  </div>
+</div>
+
 <div id="photo-lightbox" class="hidden">
   <button id="lightbox-close" type="button" aria-label="Zamknij podgląd">×</button>
   <button id="lightbox-prev" type="button" class="hidden" aria-label="Poprzednie zdjęcie">‹</button>

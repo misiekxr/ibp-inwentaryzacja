@@ -6,7 +6,7 @@
 // sam badge) jest juz w pelni sparsowany, zanim ta linia w ogole sie wykona;
 // nasluch na DOMContentLoaded tutaj nigdy by sie nie odpalil (zdarzenie juz
 // minelo), zostawiajac badge pusty.
-const BUILD_VERSION = "v46 · 12.16.15.10.26";
+const BUILD_VERSION = "v47 · 12.25.15.10.26";
 const buildVersionBadgeEl = document.getElementById("build-version-badge");
 if (buildVersionBadgeEl) buildVersionBadgeEl.textContent = BUILD_VERSION;
 
@@ -727,6 +727,67 @@ const valueModalMessage = document.getElementById("value-modal-message");
 const valueModalInput = document.getElementById("value-modal-input");
 const valueModalOk = document.getElementById("value-modal-ok");
 const valueModalCancel = document.getElementById("value-modal-cancel");
+
+const eventEditModal = document.getElementById("event-edit-modal");
+const eventEditCategory = document.getElementById("event-edit-category");
+const eventEditLayer = document.getElementById("event-edit-layer");
+const eventEditDone = document.getElementById("event-edit-done");
+const eventEditDueDate = document.getElementById("event-edit-due-date");
+const eventEditReviewDate = document.getElementById("event-edit-review-date");
+const eventEditNote = document.getElementById("event-edit-note");
+const eventEditSave = document.getElementById("event-edit-save");
+const eventEditCancel = document.getElementById("event-edit-cancel");
+let eventEditingId = null;
+
+// Edycja zdarzenia wprost z zestawienia (zakladka Inwentaryzacja) - patrz
+// "Edytuj" w loadInventory() ponizej. Dziala na KAZDEJ zakladce (modal na
+// poziomie body), wiec nie trzeba przelaczac sie na mape/czekac na
+// doladowanie budynku tylko po to, zeby zmienic kategorie/status/termin.
+async function openEventEditModal(m) {
+  eventEditingId = m.id;
+  const cats = await knownCategories();
+  eventEditCategory.innerHTML = '<option value="">(brak)</option>';
+  for (const c of cats) {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    eventEditCategory.appendChild(opt);
+  }
+  eventEditCategory.value = m.category || "";
+  eventEditLayer.value = m.layer || "inventory";
+  eventEditDone.checked = !!m.done;
+  eventEditDueDate.value = m.dueDate || "";
+  eventEditReviewDate.value = m.reviewDate || "";
+  eventEditNote.value = m.note || "";
+  eventEditModal.classList.remove("hidden");
+}
+function closeEventEditModal() {
+  eventEditModal.classList.add("hidden");
+  eventEditingId = null;
+}
+eventEditCancel.addEventListener("click", closeEventEditModal);
+eventEditModal.addEventListener("click", (e) => {
+  if (e.target === eventEditModal) closeEventEditModal(); // klik w tlo = anuluj
+});
+eventEditSave.addEventListener("click", async () => {
+  if (eventEditingId == null) return;
+  const id = eventEditingId;
+  const updated = await dbUpdateMarker(id, {
+    category: eventEditCategory.value,
+    layer: eventEditLayer.value,
+    done: eventEditDone.checked,
+    dueDate: eventEditDueDate.value,
+    reviewDate: eventEditReviewDate.value,
+    note: eventEditNote.value,
+    updatedAt: new Date().toISOString(),
+  });
+  closeEventEditModal();
+  await loadInventory();
+  // Jesli akurat ten punkt jest widoczny na mapie (ten sam budynek/plan), od
+  // razu odswiez tez jego pinezke - zeby kolor/status nie byl nieaktualny do
+  // czasu nastepnego przeladowania mapy.
+  if (updated && leafletMarkers[id]) refreshLeafletMarker(updated);
+});
 
 let buildingsData = [];
 let SERVICE_MODE = false;
@@ -2549,11 +2610,15 @@ async function loadPomiary() {
     tbody.appendChild(tr);
   });
   tbody.querySelectorAll("a[data-id]").forEach((a) => {
-    a.addEventListener("click", () => editMeasurementFromList(Number(a.dataset.id)));
+    // Jak przy markerach (patrz loadInventory): id pomiaru to UUID string od
+    // czasu migracji, nie liczba - Number(uuid) dawal NaN i .find()/db.get()
+    // nigdy nic nie znajdowaly, wiec "Pokaz/edytuj" i "Usun" po cichu nic nie
+    // robily.
+    a.addEventListener("click", () => editMeasurementFromList(a.dataset.id));
   });
   tbody.querySelectorAll("a[data-del]").forEach((a) => {
     a.addEventListener("click", async () => {
-      const id = Number(a.dataset.del);
+      const id = a.dataset.del;
       if (!confirm("Usunąć ten pomiar?")) return;
       await dbDeleteMeasurement(id);
       if (activeMeasurement && activeMeasurement.id === id) await closeMeasurePanel();
@@ -2682,7 +2747,7 @@ async function loadInventory() {
       <td>${m.dueDate || ""}${m.reviewDate ? ` / kontrola: ${m.reviewDate}` : ""}</td>
       <td>${photoCell}</td>
       <td>${(m.createdAt || "").replace("T", " ").slice(0, 19)}</td>
-      <td class="row-actions"><a data-id="${m.id}" data-plan="${m.planFile}">Pokaż na mapie</a>${lifecycleAction}</td>
+      <td class="row-actions"><a data-id="${m.id}" data-plan="${m.planFile}">Pokaż na mapie</a> · <a data-edit-id="${m.id}">Edytuj</a>${lifecycleAction}</td>
     `;
     if (m.photos && m.photos.length) {
       const thumbImg = tr.querySelector("img.thumb");
@@ -2693,7 +2758,11 @@ async function loadInventory() {
   tbody.querySelectorAll("a[data-id]").forEach((a) => {
     a.addEventListener("click", async () => {
       document.querySelector('.tab-btn[data-tab="map"]').click();
-      const m = await dbGetMarker(Number(a.dataset.id));
+      // Bug sprzed migracji numerycznych ID na UUID: Number(uuid) daje NaN,
+      // wiec dbGetMarker nigdy nie znajdowal rekordu - "Pokaz na mapie" po
+      // cichu nic nie robilo (sam tab sie przelaczal, nic wiecej). id trzeba
+      // przekazac jako string, tak jak jest zapisany w IndexedDB.
+      const m = await dbGetMarker(a.dataset.id);
       if (!m) return;
       if (m.buildingCode !== currentBuildingCode || m.planFile !== currentPlanFile) {
         buildingSelect.value = m.buildingCode;
@@ -2706,6 +2775,12 @@ async function loadInventory() {
         map.panTo(marker.getLatLng());
         openMarkerPanel(m);
       }
+    });
+  });
+  tbody.querySelectorAll("a[data-edit-id]").forEach((a) => {
+    a.addEventListener("click", async () => {
+      const m = await dbGetMarker(a.dataset.editId);
+      if (m) openEventEditModal(m);
     });
   });
   tbody.querySelectorAll("a[data-lifecycle-id]").forEach((a) => {

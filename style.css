@@ -501,6 +501,26 @@ main {
 .value-modal-box h3 { margin: 0; font-size: 0.95rem; }
 .value-modal-box p { margin: 0; font-size: 0.82rem; color: var(--muted); }
 .value-modal-box input { font-size: 1rem; width: 100%; }
+.value-modal-box label { display: flex; flex-direction: column; gap: 3px; font-size: 0.8rem; color: var(--muted); }
+.value-modal-box select, .value-modal-box textarea { font-size: 0.9rem; width: 100%; font-family: inherit; }
+
+/* Edycja zdarzenia wprost z zestawienia (zakladka Inwentaryzacja) - te same
+   pola co panel notatki na mapie, ale jako samodzielny modal dzialajacy na
+   KAZDEJ zakladce (overlay na poziomie body, jak #value-modal), zeby nie
+   trzeba bylo przelaczac sie na mape i czekac na doladowanie budynku tylko
+   po to, zeby zmienic kategorie/status/termin. */
+#event-edit-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 3100;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+#event-edit-modal.hidden { display: none; }
+#event-edit-modal .value-modal-box { width: 360px; }
 
 .status-toggle {
   flex-direction: row !important;
