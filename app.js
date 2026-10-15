@@ -1469,6 +1469,14 @@ async function onMapClick(e) {
   }
 
   const now = new Date().toISOString();
+  // Symbol (drzwi, gasnica, znak itp. - placementMode ustawiony na id typu) to
+  // zawsze faktyczny element wyposazenia IBP, niezaleznie od tego, jaka
+  // warstwa byla ostatnio wybrana w menu "Stawiam" (np. zostala z poprzedniej
+  // serii zwyklych punktow w DOSTAWY/poprawki) - wiec kategoria i warstwa
+  // ida na sztywno "Aktualizacja planow IBP" / Inwentaryzacja IBP. Zwykly
+  // punkt (bez symbolu) zostaje bez zmian - dziedziczy biezacy wybor warstwy,
+  // kategoria pusta do recznego wpisania jak dotad.
+  const isSymbol = !!placementMode;
   const marker = await dbAddMarker({
     buildingCode: currentBuildingCode,
     planKey: currentPlanKey,
@@ -1477,8 +1485,8 @@ async function onMapClick(e) {
     x: e.latlng.lng,
     y: e.latlng.lat,
     note: "",
-    category: "",
-    layer: placementLayer.value || "inventory",
+    category: isSymbol ? "Aktualizacja planów IBP" : "",
+    layer: isSymbol ? "inventory" : placementLayer.value || "inventory",
     dueDate: "",
     reviewDate: "",
     photos: [],
