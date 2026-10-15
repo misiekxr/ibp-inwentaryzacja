@@ -269,6 +269,7 @@ main {
 
 .map-menu-filter { display: flex; flex-direction: column; gap: 2px; font-size: 0.85rem; color: var(--muted); }
 .map-menu-filter select { font: inherit; }
+.map-layer-filter-row { display: flex; align-items: center; gap: 6px; font-weight: normal; }
 
 .map-menu-btn { width: 100%; text-align: left; }
 
@@ -399,6 +400,8 @@ main {
 }
 
 #marker-panel.hidden, #measure-panel.hidden { display: none; }
+#marker-sprawa-section { display: flex; flex-direction: column; gap: 8px; }
+#marker-sprawa-section.hidden { display: none; }
 
 #locate-candidates-panel {
   position: absolute;
@@ -502,6 +505,7 @@ main {
 .value-modal-box p { margin: 0; font-size: 0.82rem; color: var(--muted); }
 .value-modal-box input { font-size: 1rem; width: 100%; }
 .value-modal-box label { display: flex; flex-direction: column; gap: 3px; font-size: 0.8rem; color: var(--muted); }
+#event-edit-category-row.hidden { display: none; }
 .value-modal-box select, .value-modal-box textarea { font-size: 0.9rem; width: 100%; font-family: inherit; }
 
 /* Edycja zdarzenia wprost z zestawienia (zakladka Inwentaryzacja) - te same
@@ -521,6 +525,35 @@ main {
 }
 #event-edit-modal.hidden { display: none; }
 #event-edit-modal .value-modal-box { width: 360px; }
+
+#compare-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 3100;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+#compare-modal.hidden { display: none; }
+.compare-modal-box { width: min(700px, 100%); max-height: 85vh; overflow-y: auto; }
+.compare-modal-hint { margin-bottom: 4px !important; }
+.compare-grid { display: grid; gap: 1px; background: var(--border); border: 1px solid var(--border); font-size: 0.85rem; }
+.compare-grid-row { display: contents; }
+.compare-grid-cell { background: var(--panel); padding: 6px 8px; }
+.compare-grid-cell.compare-label { background: var(--bg); font-weight: 600; color: var(--muted); }
+.compare-grid-cell img.thumb { max-width: 80px; max-height: 80px; display: block; }
+
+/* Rzedy w zestawieniu "Inwentaryzacja" wygladajace na duplikaty (ta sama
+   notatka w tym samym budynku, np. po zdublowaniu punktow na nowy rzut) -
+   wspolna zolta obwodka, zeby od razu rzucaly sie w oczy jako para do
+   recznego przejrzenia (patrz compareDuplicateGroup w app.js). Nic nie
+   usuwamy/laczymy automatycznie - to tylko podpowiedz dla administratora. */
+tr.dup-row td:first-child { border-left: 3px solid #eab308; }
+tr.dup-row td:last-child { border-right: 3px solid #eab308; }
+tr.dup-row td { border-top: 2px solid #eab308; border-bottom: 2px solid #eab308; }
+.dup-compare-btn { background: #eab308; border-color: #ca8a04; color: #1f2328; }
 
 .status-toggle {
   flex-direction: row !important;

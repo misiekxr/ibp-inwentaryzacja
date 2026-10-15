@@ -6,7 +6,7 @@
 // sam badge) jest juz w pelni sparsowany, zanim ta linia w ogole sie wykona;
 // nasluch na DOMContentLoaded tutaj nigdy by sie nie odpalil (zdarzenie juz
 // minelo), zostawiajac badge pusty.
-const BUILD_VERSION = "v49 · 13.55.15.10.26";
+const BUILD_VERSION = "v50 · 15.55.15.10.26";
 const buildVersionBadgeEl = document.getElementById("build-version-badge");
 if (buildVersionBadgeEl) buildVersionBadgeEl.textContent = BUILD_VERSION;
 
@@ -590,7 +590,7 @@ const calibrateBtn = document.getElementById("calibrate-btn");
 const rotateLeftBtn = document.getElementById("rotate-left-btn");
 const rotateRightBtn = document.getElementById("rotate-right-btn");
 const locateBtn = document.getElementById("locate-btn");
-const mapLayerFilterSelect = document.getElementById("map-layer-filter");
+const mapLayerFilterCheckboxes = document.querySelectorAll(".map-layer-filter-cb");
 const symbolPaletteToggle = document.getElementById("symbol-palette-toggle");
 const symbolPaletteList = document.getElementById("symbol-palette-list");
 const paletteCurrentLabel = document.getElementById("palette-current-label");
@@ -600,13 +600,18 @@ const backupBanner = document.getElementById("backup-banner");
 // Kolory warstw - obramówka calego okna (ktora warstwe stawiam TERAZ) oraz
 // obramówka pinezek na mapie (jaka warstwe reprezentuje KAZDY marker z osobna).
 // DOSTAWA = zielony jak znaki ewakuacyjne, Inwentaryzacja IBP = bordo UPWr
-// (ten sam --accent co reszta appki), Sprawy Ppoz. (nadzor nad remontem +
-// ochrona/kontrola nocna) = zloto-brunatny - jedna grupa wizualna w menu
-// (patrz optgroup w index.html), ale bez zmiany w danych (layer zostaje
-// "renovation"/"security" jak dotad).
+// (ten sam --accent co reszta appki), Sprawy Ppoz. = zloto-brunatny. Od
+// 2026-10 to JEDNA warstwa "ppoz" - dawny podzial na osobne warstwy
+// renovation/security zastapila "sprawa" (= kategoria, patrz DEFAULT_CATEGORIES
+// i layerHasSprawy nizej), bo dublowalo to mechanizm kategorii.
 const LAYER_COLORS = {
   delivery: "#2e7d32",
   inventory: "#782834",
+  ppoz: "#9c6b14",
+  // Stare wartosci warstwy sprzed scalenia z "kategoria" (2026-10) - zeby
+  // kolor pinezki nie skakal na domyslny bordowy, gdyby gdzies zostal
+  // niezmigrowany rekord (nic nie migrujemy automatycznie, Robert robi to
+  // recznie w swoim tempie - patrz LAYER_LABELS nizej i ten sam komentarz tam).
   renovation: "#9c6b14",
   security: "#9c6b14",
 };
@@ -653,6 +658,7 @@ const markerPanelTitle = document.getElementById("marker-panel-title");
 const markerAttribution = document.getElementById("marker-attribution");
 const markerDone = document.getElementById("marker-done");
 const markerLayer = document.getElementById("marker-layer");
+const markerSprawaSection = document.getElementById("marker-sprawa-section");
 const markerDueDate = document.getElementById("marker-due-date");
 const markerReviewDate = document.getElementById("marker-review-date");
 const markerCategory = document.getElementById("marker-category");
@@ -728,8 +734,13 @@ const valueModalInput = document.getElementById("value-modal-input");
 const valueModalOk = document.getElementById("value-modal-ok");
 const valueModalCancel = document.getElementById("value-modal-cancel");
 
+const compareModal = document.getElementById("compare-modal");
+const compareModalBody = document.getElementById("compare-modal-body");
+const compareModalClose = document.getElementById("compare-modal-close");
+
 const eventEditModal = document.getElementById("event-edit-modal");
 const eventEditCategory = document.getElementById("event-edit-category");
+const eventEditCategoryRow = document.getElementById("event-edit-category-row");
 const eventEditLayer = document.getElementById("event-edit-layer");
 const eventEditDone = document.getElementById("event-edit-done");
 const eventEditDueDate = document.getElementById("event-edit-due-date");
@@ -755,6 +766,7 @@ async function openEventEditModal(m) {
   }
   eventEditCategory.value = m.category || "";
   eventEditLayer.value = m.layer || "inventory";
+  eventEditCategoryRow.classList.toggle("hidden", !layerHasSprawy(eventEditLayer.value));
   eventEditDone.checked = !!m.done;
   eventEditDueDate.value = m.dueDate || "";
   eventEditReviewDate.value = m.reviewDate || "";
@@ -765,6 +777,11 @@ function closeEventEditModal() {
   eventEditModal.classList.add("hidden");
   eventEditingId = null;
 }
+eventEditLayer.addEventListener("change", () => {
+  const hasSprawy = layerHasSprawy(eventEditLayer.value);
+  eventEditCategoryRow.classList.toggle("hidden", !hasSprawy);
+  if (!hasSprawy) eventEditCategory.value = "";
+});
 eventEditCancel.addEventListener("click", closeEventEditModal);
 eventEditModal.addEventListener("click", (e) => {
   if (e.target === eventEditModal) closeEventEditModal(); // klik w tlo = anuluj
@@ -790,6 +807,10 @@ eventEditSave.addEventListener("click", async () => {
 });
 
 let buildingsData = [];
+// Ostatnio wyrenderowana (po wszystkich filtrach) lista w zakladce
+// Inwentaryzacja - draft raportu zadan czyta stad, zeby drukowac dokladnie
+// to, co Robert akurat widzi na ekranie (patrz loadInventory/generateWorkReport).
+let currentInventoryMarkers = [];
 let SERVICE_MODE = false;
 let map = null;
 let imageOverlay = null;
@@ -893,22 +914,39 @@ valueModalInput.addEventListener("keydown", (e) => {
   }
 });
 
+// Od 2026-10 "kategoria" = "sprawa" i dotyczy WYLACZNIE warstwy Sprawy Ppoż.
+// (DOSTAWA i Inwentaryzacja IBP nie maja podkategorii - "ida zbiorczo", patrz
+// marker-sprawa-section w index.html). Dawne "Nadzor nad remontem"/"Ochrona /
+// kontrola nocna" byly osobnymi WARSTWAMI - teraz sa zwyklymi, gotowymi do
+// wyboru sprawami w ramach jednej warstwy Sprawy Ppoż.
 const DEFAULT_CATEGORIES = [
+  "Nadzór nad remontem",
+  "Ochrona / kontrola nocna",
   "Czujki a zwierzęta pozostawione na noc",
   "Propozycja lokalizacji punktów odbicia się dla ochroniarza",
-  "Aktualizacja planów IBP",
-  "DOSTAWA",
 ];
 
 const LAYER_LABELS = {
   inventory: "Inwentaryzacja IBP",
   delivery: "DOSTAWY / poprawki",
-  renovation: "Nadzór nad remontem",
-  security: "Ochrona / kontrola nocna",
+  ppoz: "Sprawy Ppoż.",
+  // Stare wartosci (przed scaleniem warstwy z kategoria 2026-10) - czytelna
+  // etykieta, dopoki Robert recznie nie przejrzy i nie przepisze starych
+  // zdarzen na layer="ppoz" + sprawa w kategorii.
+  renovation: "Sprawy Ppoż. (stare: Nadzór nad remontem)",
+  security: "Sprawy Ppoż. (stare: Ochrona / kontrola nocna)",
 };
 
 function layerLabel(layer) {
   return LAYER_LABELS[layer] || LAYER_LABELS.inventory;
+}
+
+// Sprawa (kategoria) dotyczy TYLKO warstwy Sprawy Ppoż. - DOSTAWA i
+// Inwentaryzacja IBP ida zbiorczo, bez podzialu. "renovation"/"security" to
+// stare, niezmigrowane rekordy sprzed scalenia - traktujemy je jak ppoz, zeby
+// sekcja sprawy nie znikala im nagle spod ryk, dopoki Robert ich nie przejrzy.
+function layerHasSprawy(layer) {
+  return layer === "ppoz" || layer === "renovation" || layer === "security";
 }
 
 // Lista kategorii = kategorie domyslne (pomniejszone o usuniete przez uzytkownika,
@@ -1341,11 +1379,16 @@ rotateRightBtn.addEventListener("click", () => rotateCurrentPlan("cw"));
 // punkty kontrolne, bez reszty inwentaryzacji). Nowo dodany punkt i tak
 // pojawia się od razu, nawet jeśli nie pasuje do aktywnego filtra - inaczej
 // dotknięcie mapy wyglądałoby, jakby nic się nie zapisało.
-let mapLayerFilter = "";
+let mapLayerFilter = new Set(Array.from(mapLayerFilterCheckboxes).map((cb) => cb.value));
 
 function markerMatchesMapFilter(m) {
   if (!isMarkerActive(m)) return false;
-  return !mapLayerFilter || m.layer === mapLayerFilter;
+  const layer = m.layer || "inventory";
+  // Stare, niezmigrowane warstwy (renovation/security sprzed scalenia z
+  // kategoria) traktujemy jak "ppoz" w filtrze widocznosci, zeby odznaczenie
+  // Sprawy Ppoż. tez je chowalo - patrz layerHasSprawy.
+  const effectiveLayer = layerHasSprawy(layer) ? "ppoz" : layer;
+  return mapLayerFilter.has(effectiveLayer);
 }
 
 async function refreshMapMarkers() {
@@ -2014,6 +2057,7 @@ async function openMarkerPanel(m) {
   }
   markerDone.checked = !!m.done;
   markerLayer.value = m.layer || "inventory";
+  markerSprawaSection.classList.toggle("hidden", !layerHasSprawy(markerLayer.value));
   markerDueDate.value = m.dueDate || "";
   markerReviewDate.value = m.reviewDate || "";
   await populateCategorySelect(m.category || "");
@@ -2102,7 +2146,18 @@ async function saveMarkerField(field, value) {
   }
 }
 
-markerLayer.addEventListener("change", () => saveMarkerField("layer", markerLayer.value));
+markerLayer.addEventListener("change", async () => {
+  const hasSprawy = layerHasSprawy(markerLayer.value);
+  markerSprawaSection.classList.toggle("hidden", !hasSprawy);
+  // Zejscie z warstwy Sprawy Ppoż. na DOSTAWA/Inwentaryzacje - te ida
+  // zbiorczo, bez sprawy, wiec czyscimy pole zamiast zostawiac "osierocona"
+  // wartosc, ktorej nigdzie juz nie widac w UI.
+  if (!hasSprawy && editingMarkerId != null) {
+    await dbUpdateMarker(editingMarkerId, { category: "", updatedAt: new Date().toISOString() });
+    await populateCategorySelect("");
+  }
+  saveMarkerField("layer", markerLayer.value);
+});
 markerDueDate.addEventListener("change", () => saveMarkerField("dueDate", markerDueDate.value));
 markerReviewDate.addEventListener("change", () => saveMarkerField("reviewDate", markerReviewDate.value));
 
@@ -2524,9 +2579,13 @@ locateBtn.addEventListener("click", async () => {
   );
 });
 
-mapLayerFilterSelect.addEventListener("change", () => {
-  mapLayerFilter = mapLayerFilterSelect.value;
-  refreshMapMarkers();
+mapLayerFilterCheckboxes.forEach((cb) => {
+  cb.addEventListener("change", () => {
+    mapLayerFilter = new Set(
+      Array.from(mapLayerFilterCheckboxes).filter((c) => c.checked).map((c) => c.value)
+    );
+    refreshMapMarkers();
+  });
 });
 
 // --- Tabs ---
@@ -2683,6 +2742,88 @@ async function refreshCategoryFilterOptions() {
   if (cats.includes(current)) inventoryCategoryFilter.value = current;
 }
 
+// Reczne porownanie mozliwych duplikatow (patrz dupIdToGroupIds w
+// loadInventory) - Robert sam decyduje co dalej (usunac jedno, przepisac
+// sprawe, zostawic oba), appka tylko uklada dane obok siebie zeby latwiej
+// bylo to ocenic. Nic nie laczy/usuwa automatycznie.
+async function openCompareModal(ids) {
+  const items = [];
+  for (const id of ids) {
+    const m = await dbGetMarker(id);
+    if (m) items.push(m);
+  }
+  if (items.length < 2) return;
+
+  const fields = [
+    ["Budynek", (m) => m.buildingCode],
+    ["Plan", (m) => m.planName],
+    ["Warstwa", (m) => layerLabel(m.layer)],
+    ["Sprawa", (m) => m.category || "(brak)"],
+    ["Status", (m) => (m.done ? "Załatwione" : "Do zrobienia")],
+    ["Notatka", (m) => m.note || ""],
+    ["Termin", (m) => m.dueDate || ""],
+    ["Data kontroli", (m) => m.reviewDate || ""],
+    ["Utworzono", (m) => (m.createdAt || "").replace("T", " ").slice(0, 19)],
+    ["Zaktualizowano", (m) => (m.updatedAt || "").replace("T", " ").slice(0, 19)],
+  ];
+
+  compareModalBody.innerHTML = "";
+  compareModalBody.style.gridTemplateColumns = `140px repeat(${items.length}, 1fr)`;
+
+  const headerRow = document.createElement("div");
+  headerRow.className = "compare-grid-row";
+  headerRow.appendChild(Object.assign(document.createElement("div"), { className: "compare-grid-cell compare-label" }));
+  items.forEach((m, i) => {
+    const cell = document.createElement("div");
+    cell.className = "compare-grid-cell";
+    cell.style.fontWeight = "600";
+    cell.textContent = `#${i + 1} — ${m.id.slice(0, 8)}…`;
+    headerRow.appendChild(cell);
+  });
+  compareModalBody.appendChild(headerRow);
+
+  for (const [label, getter] of fields) {
+    const row = document.createElement("div");
+    row.className = "compare-grid-row";
+    const labelCell = document.createElement("div");
+    labelCell.className = "compare-grid-cell compare-label";
+    labelCell.textContent = label;
+    row.appendChild(labelCell);
+    for (const m of items) {
+      const cell = document.createElement("div");
+      cell.className = "compare-grid-cell";
+      cell.textContent = getter(m);
+      row.appendChild(cell);
+    }
+    compareModalBody.appendChild(row);
+  }
+
+  const photoRow = document.createElement("div");
+  photoRow.className = "compare-grid-row";
+  const photoLabelCell = document.createElement("div");
+  photoLabelCell.className = "compare-grid-cell compare-label";
+  photoLabelCell.textContent = "Zdjęcia";
+  photoRow.appendChild(photoLabelCell);
+  for (const m of items) {
+    const cell = document.createElement("div");
+    cell.className = "compare-grid-cell";
+    for (const p of (m.photos || []).slice(0, 3)) {
+      const img = document.createElement("img");
+      img.className = "thumb";
+      img.src = URL.createObjectURL(p.blob);
+      cell.appendChild(img);
+    }
+    photoRow.appendChild(cell);
+  }
+  compareModalBody.appendChild(photoRow);
+
+  compareModal.classList.remove("hidden");
+}
+compareModalClose.addEventListener("click", () => compareModal.classList.add("hidden"));
+compareModal.addEventListener("click", (e) => {
+  if (e.target === compareModal) compareModal.classList.add("hidden");
+});
+
 async function loadInventory() {
   if (!buildingsData.length) return;
   populateInventoryBuildingFilter();
@@ -2703,9 +2844,33 @@ async function loadInventory() {
   else markers = markers.filter(isMarkerActive);
   if (statusFilter === "open") markers = markers.filter((m) => !m.done);
   if (statusFilter === "done") markers = markers.filter((m) => !!m.done);
-  if (layerFilter) markers = markers.filter((m) => (m.layer || "inventory") === layerFilter);
+  if (layerFilter) {
+    markers = markers.filter((m) => {
+      const layer = m.layer || "inventory";
+      return (layerHasSprawy(layer) ? "ppoz" : layer) === layerFilter;
+    });
+  }
   if (categoryFilter) markers = markers.filter((m) => m.category === categoryFilter);
   markers.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+  currentInventoryMarkers = markers;
+
+  // Mozliwe duplikaty: identyczna notatka (po trim, bez wzgledu na wielkosc
+  // liter) w tym samym budynku, w aktualnie widocznej (przefiltrowanej)
+  // liscie - np. po zdublowaniu punktow ze starego rzutu na nowy (patrz
+  // buildings/C4). Tylko podpowiedz - patrz openCompareModal.
+  const dupKeyGroups = new Map();
+  for (const m of markers) {
+    const note = (m.note || "").trim().toLowerCase();
+    if (!note) continue;
+    const key = `${m.buildingCode}::${note}`;
+    if (!dupKeyGroups.has(key)) dupKeyGroups.set(key, []);
+    dupKeyGroups.get(key).push(m.id);
+  }
+  const dupIdToGroupIds = new Map();
+  for (const ids of dupKeyGroups.values()) {
+    if (ids.length < 2) continue;
+    for (const id of ids) dupIdToGroupIds.set(id, ids);
+  }
 
   const tbody = document.querySelector("#inventory-table tbody");
   tbody.innerHTML = "";
@@ -2736,6 +2901,11 @@ async function loadInventory() {
         lifecycleAction = ` · <a data-lifecycle-id="${m.id}" data-lifecycle-action="${action}">${label}</a>`;
       }
     }
+    const dupIds = dupIdToGroupIds.get(m.id);
+    if (dupIds) tr.classList.add("dup-row");
+    const compareAction = dupIds
+      ? ` · <a data-compare-ids="${dupIds.join(",")}" class="dup-compare-btn">⚠ Porównaj (możliwy duplikat)</a>`
+      : "";
     tr.innerHTML = `
       <td>${idx + 1}</td>
       <td>${m.buildingCode}</td>
@@ -2747,13 +2917,16 @@ async function loadInventory() {
       <td>${m.dueDate || ""}${m.reviewDate ? ` / kontrola: ${m.reviewDate}` : ""}</td>
       <td>${photoCell}</td>
       <td>${(m.createdAt || "").replace("T", " ").slice(0, 19)}</td>
-      <td class="row-actions"><a data-id="${m.id}" data-plan="${m.planFile}">Pokaż na mapie</a> · <a data-edit-id="${m.id}">Edytuj</a>${lifecycleAction}</td>
+      <td class="row-actions"><a data-id="${m.id}" data-plan="${m.planFile}">Pokaż na mapie</a> · <a data-edit-id="${m.id}">Edytuj</a>${lifecycleAction}${compareAction}</td>
     `;
     if (m.photos && m.photos.length) {
       const thumbImg = tr.querySelector("img.thumb");
       if (thumbImg) thumbImg.addEventListener("click", () => openLightbox(m.photos, 0));
     }
     tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll("a[data-compare-ids]").forEach((a) => {
+    a.addEventListener("click", () => openCompareModal(a.dataset.compareIds.split(",")));
   });
   tbody.querySelectorAll("a[data-id]").forEach((a) => {
     a.addEventListener("click", async () => {
@@ -3979,9 +4152,14 @@ async function generateFullReport() {
 fullReportBtn.addEventListener("click", generateFullReport);
 
 async function generateWorkReport() {
-  const markers = (await dbGetAllMarkers()).filter((m) => isMarkerActive(m) && !m.done);
+  // Drukuje dokladnie to, co jest aktualnie widoczne w tabeli ponizej (po
+  // wszystkich filtrach: budynek/plan/status/warstwa/sprawa/kosz-archiwum) -
+  // NIE zawsze "wszystkie otwarte zadania z calego kampusu" jak dawniej.
+  // Kopia (.slice()), zeby sortowanie ponizej nie mieszalo listy uzywanej
+  // przez sama tabele Inwentaryzacji.
+  const markers = currentInventoryMarkers.slice();
   if (!markers.length) {
-    alert("Nie ma otwartych zadań do raportu.");
+    alert("Brak zdarzeń do raportu przy aktualnych filtrach w zakładce Inwentaryzacja.");
     return;
   }
   const { jsPDF } = window.jspdf;
@@ -4000,7 +4178,7 @@ async function generateWorkReport() {
   doc.setFont("PTSerif", "normal");
   doc.setFontSize(9);
   doc.setTextColor(80, 80, 80);
-  doc.text(`Wygenerowano: ${new Date().toLocaleString("pl-PL")} | Liczba otwartych zadań: ${markers.length}`, margin, y);
+  doc.text(`Wygenerowano: ${new Date().toLocaleString("pl-PL")} | Liczba pozycji (wg filtrów): ${markers.length}`, margin, y);
   y += 10;
   doc.setTextColor(20, 20, 20);
   markers.sort((a, b) => (a.reviewDate || a.dueDate || "9999") .localeCompare(b.reviewDate || b.dueDate || "9999"));
@@ -4026,7 +4204,7 @@ async function generateWorkReport() {
   doc.save(filename);
   const recipients = (await dbGetMeta("reportEmails")) || "";
   const subject = encodeURIComponent(`Draft zadań PPOŻ — ${dateStamp}`);
-  const body = encodeURIComponent(`Dzień dobry,\n\nW załączeniu draft raportu zadań PPOŻ z dnia ${dateStamp}.\n\nLiczba otwartych zadań: ${markers.length}.\n\nRaport został pobrany jako plik PDF i należy go dołączyć do wiadomości.`);
+  const body = encodeURIComponent(`Dzień dobry,\n\nW załączeniu draft raportu zadań PPOŻ z dnia ${dateStamp}.\n\nLiczba pozycji (wg filtrów w zakładce Inwentaryzacja): ${markers.length}.\n\nRaport został pobrany jako plik PDF i należy go dołączyć do wiadomości.`);
   window.location.href = `mailto:${encodeURIComponent(recipients)}?subject=${subject}&body=${body}`;
 }
 

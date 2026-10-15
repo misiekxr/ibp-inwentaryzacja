@@ -61,10 +61,7 @@
             <select id="placement-layer">
               <option value="delivery">DOSTAWA</option>
               <option value="inventory">Inwentaryzacja IBP</option>
-              <optgroup label="Sprawy Ppoż.">
-                <option value="renovation">Nadzór nad remontem</option>
-                <option value="security">Ochrona / kontrola nocna</option>
-              </optgroup>
+              <option value="ppoz">Sprawy Ppoż.</option>
             </select>
           </label>
           <button type="button" id="symbol-palette-toggle" class="palette-toggle" title="Wybierz co stawiać na mapie po dotknięciu">
@@ -73,15 +70,12 @@
           <div id="symbol-palette-list" class="symbol-palette-list hidden"></div>
         </div>
         <hr>
-        <label class="map-menu-filter">Pokaż na mapie
-          <select id="map-layer-filter">
-            <option value="">Wszystkie warstwy</option>
-            <option value="inventory">Inwentaryzacja IBP</option>
-            <option value="delivery">DOSTAWY / poprawki</option>
-            <option value="renovation">Nadzór nad remontem</option>
-            <option value="security">Ochrona / kontrola nocna</option>
-          </select>
-        </label>
+        <div class="map-menu-filter">
+          <span>Pokaż na mapie (domyślnie wszystko)</span>
+          <label class="map-layer-filter-row"><input type="checkbox" class="map-layer-filter-cb" value="inventory" checked> Inwentaryzacja IBP</label>
+          <label class="map-layer-filter-row"><input type="checkbox" class="map-layer-filter-cb" value="delivery" checked> DOSTAWY / poprawki</label>
+          <label class="map-layer-filter-row"><input type="checkbox" class="map-layer-filter-cb" value="ppoz" checked> Sprawy Ppoż.</label>
+        </div>
         <button type="button" id="locate-btn" class="secondary map-menu-btn" title="Zgadnij budynek na podstawie GPS">📍 Gdzie jestem?</button>
         <button type="button" id="calibrate-btn" class="hidden secondary map-menu-btn" title="Skalibruj skalę tego planu, żeby pomiary liczyły metry">Kalibruj skalę</button>
         <button type="button" id="rotate-left-btn" class="hidden secondary map-menu-btn" title="Obróć plan o 90° w lewo (punkty i pomiary też się przesuną)">↺ Obróć plan w lewo</button>
@@ -100,20 +94,21 @@
         <select id="marker-layer">
           <option value="inventory">Inwentaryzacja IBP</option>
           <option value="delivery">DOSTAWY / poprawki</option>
-          <option value="renovation">Nadzór nad remontem</option>
-          <option value="security">Ochrona / kontrola nocna</option>
+          <option value="ppoz">Sprawy Ppoż.</option>
         </select>
       </label>
       <label class="status-toggle">
         <input type="checkbox" id="marker-done">
         Załatwione
       </label>
-      <label>Kategoria zgłoszenia
-        <select id="marker-category"></select>
-      </label>
-      <input type="text" id="marker-category-custom" class="hidden" placeholder="Wpisz nową kategorię i zatwierdź Enter">
-      <button type="button" id="manage-categories-btn" class="link-btn">Zarządzaj kategoriami</button>
-      <div id="category-manage-list" class="category-manage-list hidden"></div>
+      <div id="marker-sprawa-section">
+        <label>Sprawa
+          <select id="marker-category"></select>
+        </label>
+        <input type="text" id="marker-category-custom" class="hidden" placeholder="Wpisz nazwę nowej sprawy i zatwierdź Enter">
+        <button type="button" id="manage-categories-btn" class="link-btn">Zarządzaj sprawami</button>
+        <div id="category-manage-list" class="category-manage-list hidden"></div>
+      </div>
       <div id="symbol-rotate-row" class="symbol-rotate-row hidden">
         <button type="button" id="symbol-rotate-left" class="secondary" title="Obróć w lewo o 90°">↺ 90°</button>
         <button type="button" id="symbol-rotate-right" class="secondary" title="Obróć w prawo o 90°">↻ 90°</button>
@@ -200,11 +195,10 @@
           <option value="">Wszystkie</option>
           <option value="inventory">Inwentaryzacja IBP</option>
           <option value="delivery">DOSTAWY / poprawki</option>
-          <option value="renovation">Nadzór nad remontem</option>
-          <option value="security">Ochrona / kontrola nocna</option>
+          <option value="ppoz">Sprawy Ppoż.</option>
         </select>
       </label>
-      <label>Kategoria:
+      <label>Sprawa:
         <select id="inventory-category-filter">
           <option value="">Wszystkie</option>
         </select>
@@ -493,19 +487,18 @@
 <div id="event-edit-modal" class="hidden">
   <div class="value-modal-box">
     <h3>Edytuj zdarzenie</h3>
-    <label>Kategoria
-      <select id="event-edit-category"></select>
-    </label>
     <label>Warstwa
       <select id="event-edit-layer">
         <option value="delivery">DOSTAWA</option>
         <option value="inventory">Inwentaryzacja IBP</option>
-        <optgroup label="Sprawy Ppoż.">
-          <option value="renovation">Nadzór nad remontem</option>
-          <option value="security">Ochrona / kontrola nocna</option>
-        </optgroup>
+        <option value="ppoz">Sprawy Ppoż.</option>
       </select>
     </label>
+    <div id="event-edit-category-row">
+      <label>Sprawa
+        <select id="event-edit-category"></select>
+      </label>
+    </div>
     <label class="status-toggle"><input type="checkbox" id="event-edit-done"> Załatwione</label>
     <label>Termin
       <input type="date" id="event-edit-due-date">
@@ -519,6 +512,17 @@
     <div class="marker-panel-actions">
       <button type="button" id="event-edit-save">Zapisz</button>
       <button type="button" id="event-edit-cancel" class="secondary">Anuluj</button>
+    </div>
+  </div>
+</div>
+
+<div id="compare-modal" class="hidden">
+  <div class="value-modal-box compare-modal-box">
+    <h3>Porównaj — możliwe duplikaty</h3>
+    <p class="compare-modal-hint">Te zdarzenia mają identyczną notatkę w tym samym budynku — sprawdź, czy to nie ten sam punkt wprowadzony dwa razy.</p>
+    <div id="compare-modal-body" class="compare-grid"></div>
+    <div class="marker-panel-actions">
+      <button type="button" id="compare-modal-close" class="secondary">Zamknij</button>
     </div>
   </div>
 </div>
