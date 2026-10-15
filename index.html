@@ -273,6 +273,26 @@
       <div id="owner-devices-list"></div>
     </div>
 
+    <div class="backup-panel" id="owner-links-panel">
+      <h2>Mój link logowania</h2>
+      <p>
+        Link bez logowania — po otwarciu urządzenie od razu dostaje PEŁNY dostęp (jak zwykłe
+        logowanie e-mail + hasło), bez wpisywania czegokolwiek. Zapisz go jako zakładkę w
+        przeglądarce na urządzeniu, którego używasz sam — przydatne na nowym urządzeniu/profilu,
+        żeby nie wpisywać hasła za każdym razem. Traktuj ten link jak hasło — nie udostępniaj go
+        innym. Możesz go wyłączyć w każdej chwili.
+      </p>
+      <label>Etykieta (np. nazwa urządzenia)
+        <input type="text" id="owner-link-label" placeholder="np. Laptop – zakładka">
+      </label>
+      <label>Ważność w dniach (puste = bez limitu, można odwołać ręcznie)
+        <input type="number" id="owner-link-expires" placeholder="np. 30" min="1" max="365">
+      </label>
+      <button id="owner-link-create-btn" type="button">Utwórz link</button>
+      <p id="owner-link-result"></p>
+      <div id="owner-links-list"></div>
+    </div>
+
     <div class="backup-panel" id="service-links-panel">
       <h2>Linki dla serwisantów</h2>
       <p>

@@ -1145,6 +1145,7 @@ function syncWireUi() {
   syncRenderStatus();
   syncWireServiceLinksUi();
   syncWireBuildingSyncLinksUi();
+  syncWireOwnerLinksUi();
 }
 
 // --- Linki dla serwisantow (dostep bez logowania, jedna kategoria) ---
@@ -1442,6 +1443,121 @@ function syncWireBuildingSyncLinksUi() {
   });
 
   syncRenderBuildingSyncLinks();
+}
+
+// --- Link logowania wlasciciela (pelny dostep bez hasla, token w adresie
+// URL - uzywa TEGO SAMEGO ?service=TOKEN co link serwisowy; syncTryUrlServiceLogin
+// wyzej i tak rozpoznaje faktyczna role z /api/whoami, wiec nie trzeba nowego
+// parametru. Wygodne do zapisania jako zakladka w Chrome na urzadzeniu, z
+// ktorego Robert korzysta sam - zero wpisywania emaila/hasla za kazdym
+// razem. Rewokacja to ten sam DELETE /api/devices/{id} co inne linki. ---
+
+async function syncCreateOwnerLink(label, expiresInDays) {
+  const cfg = await syncGetConfig();
+  if (!syncIsLoggedIn(cfg)) throw new Error("Zaloguj się najpierw.");
+  const res = await fetch(`${cfg.serverUrl}/api/owner-links`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.token}` },
+    body: JSON.stringify({ label, expires_in_days: expiresInDays || null }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Błąd (HTTP ${res.status})`);
+  return body;
+}
+
+async function syncListOwnerLinks() {
+  const cfg = await syncGetConfig();
+  if (!syncIsLoggedIn(cfg)) return [];
+  const res = await fetch(`${cfg.serverUrl}/api/owner-links`, {
+    headers: { Authorization: `Bearer ${cfg.token}` },
+  });
+  if (!res.ok) return [];
+  const body = await res.json();
+  return body.links || [];
+}
+
+async function syncRenderOwnerLinks() {
+  const listEl = document.getElementById("owner-links-list");
+  if (!listEl) return;
+  const links = await syncListOwnerLinks();
+  listEl.innerHTML = "";
+  if (!links.length) {
+    listEl.textContent = "Brak utworzonych linków.";
+    return;
+  }
+  for (const link of links) {
+    const box = document.createElement("div");
+    box.className = "sync-conflict-item";
+    const status = syncServiceLinkStatus(link);
+    const p1 = document.createElement("p");
+    p1.innerHTML = `<strong>${link.device_name}</strong> — pełny dostęp — status: ${status}`;
+    const p2 = document.createElement("p");
+    p2.textContent =
+      `Utworzono: ${new Date(link.created_at.replace(" ", "T") + "Z").toLocaleString("pl-PL")}` +
+      (link.expires_at ? ` · Ważny do: ${new Date(link.expires_at.replace(" ", "T") + "Z").toLocaleDateString("pl-PL")}` : "") +
+      (link.last_used_at ? ` · Ostatnio użyty: ${new Date(link.last_used_at.replace(" ", "T") + "Z").toLocaleString("pl-PL")}` : "");
+    box.appendChild(p1);
+    box.appendChild(p2);
+    if (status === "aktywny") {
+      const revokeBtn = document.createElement("button");
+      revokeBtn.type = "button";
+      revokeBtn.className = "danger";
+      revokeBtn.textContent = "Wyłącz link";
+      revokeBtn.addEventListener("click", async () => {
+        if (!confirm(`Wyłączyć link "${link.device_name}"? Urządzenie straci dostęp natychmiast.`)) return;
+        await syncRevokeServiceLink(link.id);
+        await syncRenderOwnerLinks();
+      });
+      box.appendChild(revokeBtn);
+    }
+    listEl.appendChild(box);
+  }
+}
+
+function syncWireOwnerLinksUi() {
+  const createBtn = document.getElementById("owner-link-create-btn");
+  if (!createBtn) return;
+
+  createBtn.addEventListener("click", async () => {
+    const label = document.getElementById("owner-link-label").value.trim();
+    const expiresInput = document.getElementById("owner-link-expires").value.trim();
+    const expiresInDays = expiresInput ? Number(expiresInput) : null;
+    if (!label) {
+      alert("Podaj etykietę linku (np. nazwę urządzenia).");
+      return;
+    }
+    createBtn.disabled = true;
+    try {
+      const result = await syncCreateOwnerLink(label, expiresInDays);
+      const url = `${window.location.origin}${window.location.pathname}?service=${result.token}`;
+      const resultEl = document.getElementById("owner-link-result");
+      resultEl.innerHTML = "";
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.textContent = url;
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.className = "secondary";
+      copyBtn.textContent = "Kopiuj";
+      copyBtn.addEventListener("click", () => {
+        navigator.clipboard.writeText(url).catch(() => {});
+      });
+      resultEl.appendChild(document.createTextNode("Link gotowy — zapisz jako zakładkę: "));
+      resultEl.appendChild(link);
+      resultEl.appendChild(document.createTextNode(" "));
+      resultEl.appendChild(copyBtn);
+      document.getElementById("owner-link-label").value = "";
+      document.getElementById("owner-link-expires").value = "";
+      await syncRenderOwnerLinks();
+    } catch (err) {
+      alert(err.message || "Nie udało się utworzyć linku.");
+    } finally {
+      createBtn.disabled = false;
+    }
+  });
+
+  syncRenderOwnerLinks();
 }
 
 // syncMigrateLegacyIds() i start (syncWireUi/syncTryFlush/syncPull) sa wywolywane
