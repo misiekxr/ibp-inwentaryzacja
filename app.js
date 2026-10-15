@@ -6,7 +6,7 @@
 // sam badge) jest juz w pelni sparsowany, zanim ta linia w ogole sie wykona;
 // nasluch na DOMContentLoaded tutaj nigdy by sie nie odpalil (zdarzenie juz
 // minelo), zostawiajac badge pusty.
-const BUILD_VERSION = "v47 · 12.25.15.10.26";
+const BUILD_VERSION = "v48 · 13.42.15.10.26";
 const buildVersionBadgeEl = document.getElementById("build-version-badge");
 if (buildVersionBadgeEl) buildVersionBadgeEl.textContent = BUILD_VERSION;
 
