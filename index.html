@@ -59,10 +59,12 @@
         <div class="map-menu-section">
           <label class="palette-layer-select">Warstwa (stawianie)
             <select id="placement-layer">
+              <option value="delivery">DOSTAWA</option>
               <option value="inventory">Inwentaryzacja IBP</option>
-              <option value="delivery">DOSTAWY / poprawki</option>
-              <option value="renovation">Nadzór nad remontem</option>
-              <option value="security">Ochrona / kontrola nocna</option>
+              <optgroup label="Sprawy Ppoż.">
+                <option value="renovation">Nadzór nad remontem</option>
+                <option value="security">Ochrona / kontrola nocna</option>
+              </optgroup>
             </select>
           </label>
           <button type="button" id="symbol-palette-toggle" class="palette-toggle" title="Wybierz co stawiać na mapie po dotknięciu">

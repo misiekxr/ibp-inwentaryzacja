@@ -23,6 +23,10 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
+  /* Obramowka calego okna = aktualnie wybrana warstwa do stawiania (patrz
+     updatePlacementLayerBorder w app.js) - zeby bylo od razu widac, w ktorym
+     trybie jestem, bez zagladania do menu "Stawiam". */
+  border: 5px solid var(--placement-layer-color, var(--accent));
 }
 
 h1, h2, h3 {

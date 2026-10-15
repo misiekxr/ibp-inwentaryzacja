@@ -585,6 +585,31 @@ const paletteCurrentLabel = document.getElementById("palette-current-label");
 const placementLayer = document.getElementById("placement-layer");
 const backupBanner = document.getElementById("backup-banner");
 
+// Kolory warstw - obramówka calego okna (ktora warstwe stawiam TERAZ) oraz
+// obramówka pinezek na mapie (jaka warstwe reprezentuje KAZDY marker z osobna).
+// DOSTAWA = zielony jak znaki ewakuacyjne, Inwentaryzacja IBP = bordo UPWr
+// (ten sam --accent co reszta appki), Sprawy Ppoz. (nadzor nad remontem +
+// ochrona/kontrola nocna) = zloto-brunatny - jedna grupa wizualna w menu
+// (patrz optgroup w index.html), ale bez zmiany w danych (layer zostaje
+// "renovation"/"security" jak dotad).
+const LAYER_COLORS = {
+  delivery: "#2e7d32",
+  inventory: "#782834",
+  renovation: "#9c6b14",
+  security: "#9c6b14",
+};
+const LAYER_COLOR_DEFAULT = "#782834";
+
+function layerColorOf(layer) {
+  return LAYER_COLORS[layer] || LAYER_COLOR_DEFAULT;
+}
+
+function updatePlacementLayerBorder() {
+  document.body.style.setProperty("--placement-layer-color", layerColorOf(placementLayer.value));
+}
+placementLayer.addEventListener("change", updatePlacementLayerBorder);
+updatePlacementLayerBorder();
+
 const startErrorBanner = document.getElementById("start-error-banner");
 const startErrorText = document.getElementById("start-error-text");
 const startErrorDetails = document.getElementById("start-error-details");
@@ -933,6 +958,7 @@ manageCategoriesBtn.addEventListener("click", async () => {
 function makeIcon(m) {
   const hasPhoto = !!(m.photos && m.photos.length);
   const done = !!m.done;
+  const layerColor = layerColorOf(m.layer);
   const photoBadge = hasPhoto
     ? `<div style="position:absolute;top:-4px;right:-4px;font-size:9px;line-height:1;">📷</div>`
     : "";
@@ -944,7 +970,8 @@ function makeIcon(m) {
     const statusDot = `<div style="position:absolute;top:-3px;left:-3px;width:9px;height:9px;border-radius:50%;background:${done ? "#16a34a" : "#782834"};border:1.5px solid white;"></div>`;
     return L.divIcon({
       className: "",
-      html: `<div style="position:relative;width:30px;height:30px;">
+      // Ramka wokol calej ikonki = warstwa markera (m.layer) - patrz LAYER_COLORS.
+      html: `<div style="position:relative;width:30px;height:30px;box-sizing:border-box;border:3px solid ${layerColor};border-radius:7px;background:rgba(255,255,255,0.85);">
         <img src="${src}" style="width:100%;height:100%;display:block;transform:${transform};" />
         ${statusDot}${photoBadge}${unlockDotHtml}
       </div>`,
@@ -956,7 +983,8 @@ function makeIcon(m) {
   const color = done ? "#16a34a" : "#782834";
   return L.divIcon({
     className: "",
-    html: `<div style="position:relative;width:16px;height:16px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 3px rgba(0,0,0,0.5);">${photoBadge}${unlockDotHtml}</div>`,
+    // Obramowka = warstwa markera (m.layer), wypelnienie = status (zrobione/nie).
+    html: `<div style="position:relative;width:16px;height:16px;border-radius:50%;background:${color};border:3px solid ${layerColor};box-shadow:0 0 3px rgba(0,0,0,0.5);">${photoBadge}${unlockDotHtml}</div>`,
     iconSize: [16, 16],
     iconAnchor: [8, 8],
   });
@@ -1474,8 +1502,9 @@ async function onMapClick(e) {
   // warstwa byla ostatnio wybrana w menu "Stawiam" (np. zostala z poprzedniej
   // serii zwyklych punktow w DOSTAWY/poprawki) - wiec kategoria i warstwa
   // ida na sztywno "Aktualizacja planow IBP" / Inwentaryzacja IBP. Zwykly
-  // punkt (bez symbolu) zostaje bez zmian - dziedziczy biezacy wybor warstwy,
-  // kategoria pusta do recznego wpisania jak dotad.
+  // punkt (notatka bez symbolu) domyslnie DOSTAWA (najczestszy przypadek -
+  // zgloszenia/braki w terenie) - warstwa nadal dziedziczy biezacy wybor w
+  // menu "Stawiam", oba pola mozna zmienic recznie w panelu notatki jak dotad.
   const isSymbol = !!placementMode;
   const marker = await dbAddMarker({
     buildingCode: currentBuildingCode,
@@ -1485,7 +1514,7 @@ async function onMapClick(e) {
     x: e.latlng.lng,
     y: e.latlng.lat,
     note: "",
-    category: isSymbol ? "Aktualizacja planów IBP" : "",
+    category: isSymbol ? "Aktualizacja planów IBP" : "DOSTAWA",
     layer: isSymbol ? "inventory" : placementLayer.value || "inventory",
     dueDate: "",
     reviewDate: "",
@@ -1557,7 +1586,9 @@ async function addMeasurementVertex(latlng) {
   };
 
   if (!activeMeasurement) {
-    activeMeasurement = { buildingCode: currentBuildingCode, category: "", label: "", points: [], segments: [] };
+    // Pomiar to, jak symbol, zawsze realny element inwentaryzacji IBP - patrz
+    // ten sam domyslny tekst kategorii przy stawianiu symbolu w onMapClick.
+    activeMeasurement = { buildingCode: currentBuildingCode, category: "Aktualizacja planów IBP", label: "", points: [], segments: [] };
   }
 
   const points = activeMeasurement.points;
