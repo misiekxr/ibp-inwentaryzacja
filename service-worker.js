@@ -1,4 +1,4 @@
-const CACHE_VERSION = "ibp-v39";
+const CACHE_VERSION = "ibp-v41";
 
 const CORE_FILES = [
   "./",
@@ -23,7 +23,19 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE_VERSION);
-      await cache.addAll(CORE_FILES);
+      // cache.addAll() robi zwykly fetch() dla kazdego URL-a, wiec respektuje
+      // normalny cache HTTP przegladarki - GitHub Pages wysyla Cache-Control:
+      // max-age=600 na kazdy plik appki. Bez wymuszenia "reload" nowy SW
+      // moglby podczas instalacji zapisac do swojego Cache Storage dokladnie
+      // te same (stare) bajty app.js/index.html, ktore juz siedzialy w cache
+      // przegladarki z poprzedniej wizyty - czyli "aktualizacja" nie
+      // aktualizowalaby tresci mimo wykrycia nowej wersji service-workera.
+      await Promise.all(
+        CORE_FILES.map(async (url) => {
+          const response = await fetch(url, { cache: "reload" });
+          await cache.put(url, response);
+        })
+      );
       self.skipWaiting();
     })()
   );

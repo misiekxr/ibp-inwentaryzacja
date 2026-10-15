@@ -3918,7 +3918,16 @@ saveReportSettingsBtn.addEventListener("click", async () => {
 // karty/co 60s) i przeladowujemy raz, gdy nowy sw faktycznie przejmie kontrole.
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", async () => {
-    const registration = await navigator.serviceWorker.register("service-worker.js").catch(() => null);
+    // updateViaCache: "none" - bez tego kazde registration.update() ponizej
+    // (co 60s / po powrocie online / po powrocie na karte) sprawdzaloby nowa
+    // wersje service-worker.js przez zwykly fetch respektujacy HTTP cache
+    // przegladarki (GitHub Pages: Cache-Control max-age=600 na kazdy plik) -
+    // w praktyce czekalibysmy do 10 minut na KAZDA probe, zanim przegladarka
+    // w ogole zapytala serwer o cokolwiek nowego. To byl powod "wolnych i
+    // niepewnych" aktualizacji na laptopie (2026-10-15).
+    const registration = await navigator.serviceWorker
+      .register("service-worker.js", { updateViaCache: "none" })
+      .catch(() => null);
     if (!registration) return;
     const checkForUpdate = () => registration.update().catch(() => {});
     window.addEventListener("online", checkForUpdate);
