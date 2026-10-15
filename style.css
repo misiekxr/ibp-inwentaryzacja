@@ -797,6 +797,22 @@ button.danger {
 
 .hidden { display: none !important; }
 
+/* Male, nienachalne oznaczenie wersji w rogu - zeby od razu bylo widac
+   (bez zagladania do DevTools), czy urzadzenie faktycznie ma najnowszy
+   build po aktualizacji. Patrz BUILD_VERSION w app.js - aktualizowane przy
+   kazdym wdrozeniu razem z CACHE_VERSION w service-worker.js. */
+#build-version-badge {
+  position: fixed;
+  left: 6px;
+  bottom: 4px;
+  z-index: 2000;
+  font-size: 0.65rem;
+  color: var(--muted);
+  opacity: 0.55;
+  pointer-events: none;
+  user-select: none;
+}
+
 #snackbar {
   position: fixed;
   left: 50%;

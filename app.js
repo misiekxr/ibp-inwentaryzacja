@@ -1,3 +1,15 @@
+// Format HH.MM.DD.MM.RR - aktualizowane recznie przy kazdym wdrozeniu, razem
+// z CACHE_VERSION w service-worker.js (ten sam numer wersji). Pokazywane w
+// lewym dolnym rogu (#build-version-badge), zeby bylo od razu widac bez
+// DevTools, czy dane urzadzenie faktycznie zdazylo pobrac najnowszy build.
+// Bez DOMContentLoaded - ten skrypt siedzi na koncu <body>, wiec DOM (w tym
+// sam badge) jest juz w pelni sparsowany, zanim ta linia w ogole sie wykona;
+// nasluch na DOMContentLoaded tutaj nigdy by sie nie odpalil (zdarzenie juz
+// minelo), zostawiajac badge pusty.
+const BUILD_VERSION = "v46 · 12.16.15.10.26";
+const buildVersionBadgeEl = document.getElementById("build-version-badge");
+if (buildVersionBadgeEl) buildVersionBadgeEl.textContent = BUILD_VERSION;
+
 const { openDB } = idb;
 
 const dbPromise = openDB("ibp-db", 4, {
