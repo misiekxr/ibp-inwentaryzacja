@@ -697,12 +697,19 @@ async function syncPull() {
     // Wlasne, osobne kursory per budynek (patrz syncPullRecords/Plans/
     // PhotosMeta) sprawiaja, ze powtarzanie tego co tyk jest tanie -
     // pobiera sie tylko to, co sie faktycznie zmienilo od ostatniego razu,
-    // nie caly budynek od nowa za kazdym razem.
-    const recentBuildings = await syncGetRecentBuildings();
-    for (const code of recentBuildings) {
-      await syncPullPlans(cfg, code);
-      await syncPullRecords(cfg, code);
-      await syncPullPhotosMeta(cfg, code);
+    // nie caly budynek od nowa za kazdym razem. Osobny try/catch - blad przy
+    // doraznym odswiezaniu "ostatnich budynkow" (np. jeden nieudany fetch)
+    // NIE MOZE zablokowac normalnego, pelnego sync ponizej - to by bylo
+    // gorsze niz brak tej funkcji w ogole.
+    try {
+      const recentBuildings = await syncGetRecentBuildings();
+      for (const code of recentBuildings) {
+        await syncPullPlans(cfg, code);
+        await syncPullRecords(cfg, code);
+        await syncPullPhotosMeta(cfg, code);
+      }
+    } catch (err) {
+      console.error("[sync] odswiezanie ostatnich budynkow nie dokonczylo sie (pelny sync ponizej i tak ruszy):", err);
     }
     await syncPullRecords(cfg);
     await syncPullPlans(cfg);
