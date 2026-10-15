@@ -1071,6 +1071,11 @@ async function loadBuildings() {
 
 async function loadPlans(buildingCode, preferredFile) {
   currentBuildingCode = buildingCode;
+  // Fire-and-forget - priorytetowo dociagnij ten budynek (plany, markery,
+  // zdjecia) z serwera, wyprzedzajac zwykla kolejke synchronizacji calego
+  // kampusu. Lokalne dane (ponizej) i tak renderuja sie natychmiast, zanim
+  // to w ogole zdazy odpowiedziec - patrz syncPrioritizeBuilding w sync.js.
+  if (typeof syncPrioritizeBuilding === "function") syncPrioritizeBuilding(buildingCode);
   const building = buildingsData.find((b) => b.code === buildingCode);
   planSelect.innerHTML = "";
   if (!building) return;

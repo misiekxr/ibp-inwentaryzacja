@@ -51,6 +51,7 @@
       <p>Brak wczytanych planów budynków.</p>
       <p id="empty-state-sync-status">Przejdź do zakładki <strong>Kopia zapasowa</strong> i wczytaj plik planów (np. plany-B1.json).</p>
     </div>
+    <div id="building-sync-banner" class="hidden"></div>
     <div id="map"></div>
     <div id="map-menu" class="map-menu">
       <button type="button" id="map-menu-toggle" class="map-menu-toggle" title="Menu narzędzi mapy" aria-label="Menu narzędzi mapy">⋮</button>
@@ -289,6 +290,27 @@
       <button id="service-link-create-btn" type="button">Utwórz link</button>
       <p id="service-link-result"></p>
       <div id="service-links-list"></div>
+    </div>
+
+    <div class="backup-panel" id="building-sync-links-panel">
+      <h2>Linki synchronizacji budynków</h2>
+      <p>
+        Osobny link, bez logowania — po otwarciu urządzenie dostaje pełny dostęp (jak administrator),
+        ale tylko do wybranych budynków: synchronizuje się WYŁĄCZNIE z ich planami i notatkami,
+        zamiast pobierać wszystkie budynki z całego kampusu. Przydatne dla urządzenia, które
+        pracuje tylko w jednej części terenu. Możesz go wyłączyć w każdej chwili.
+      </p>
+      <label>Etykieta (np. nazwa urządzenia/lokalizacji)
+        <input type="text" id="building-sync-link-label" placeholder="np. Tablet – portiernia E5">
+      </label>
+      <p>Budynki, do których link ma dawać dostęp:</p>
+      <div id="building-sync-link-buildings" class="building-sync-checkboxes"></div>
+      <label>Ważność w dniach (puste = bez limitu, można odwołać ręcznie)
+        <input type="number" id="building-sync-link-expires" placeholder="np. 30" min="1" max="365">
+      </label>
+      <button id="building-sync-link-create-btn" type="button">Utwórz link</button>
+      <p id="building-sync-link-result"></p>
+      <div id="building-sync-links-list"></div>
     </div>
 
     <div class="backup-panel" id="pending-requests-panel">

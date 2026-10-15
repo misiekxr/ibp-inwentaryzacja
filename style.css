@@ -195,6 +195,22 @@ main {
 
 #empty-state.hidden { display: none; }
 
+/* Komunikat "Ładowanie budynku X… Y%" - pojawia się tylko gdy syncPrioritizeBuilding
+   (sync.js) faktycznie ma co pobrać dla wybranego budynku; patrz tam. */
+#building-sync-banner {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 950;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
 /* Wszystkie dawniej osobne pływające elementy nad mapą (paleta symboli,
    filtr warstw, stos przycisków fab, natywny zoom Leaflet) zeszły do jednego
    wspólnego, domyślnie zwiniętego menu - inaczej na telefonie zasłaniały plan. */
@@ -922,6 +938,28 @@ td.row-actions a {
   margin-top: 10px;
 }
 .sync-conflict-item p { margin: 4px 0; }
+
+.building-sync-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 6px;
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+}
+.building-sync-checkbox {
+  display: flex !important;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: var(--text);
+  margin: 0 !important;
+  width: auto;
+}
+.building-sync-checkbox input { margin: 0; }
 
 .sync-diff-table {
   width: 100%;

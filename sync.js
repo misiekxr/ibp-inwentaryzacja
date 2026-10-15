@@ -63,6 +63,7 @@ async function syncLogin(serverUrl, email, password) {
   await dbSetMeta("syncServerUrl", url);
   await dbSetMeta("syncToken", body.token);
   await dbSetMeta("isServiceMode", false);
+  await dbSetMeta("restrictBuildings", null);
   await syncMigrateLegacyIds();
   await syncEnqueueAllExisting();
   syncTryFlush();
@@ -75,6 +76,14 @@ async function syncLogin(serverUrl, email, password) {
 // egzekwowane przez serwer - to tutaj tylko przelacza interfejs w tryb
 // uproszczony (patrz syncApplyUiRestrictions w app.js) i chowa token z paska
 // adresu, zeby nie zostal np. w historii przegladarki po zrzucie ekranu.
+//
+// Link synchronizacji budynkow (?buildingSync=...) to ten sam mechanizm
+// (token w adresie, bez logowania), ale odwrotne uprawnienia: PELNY dostep
+// (rola owner) ograniczony tylko do WYBRANYCH budynkow (filtrowanie po
+// stronie serwera - Auth::restrictedBuildings w PlanController/SyncController/
+// PhotoController) - do urzadzen, ktore maja pracowac tylko w czesci kampusu
+// i nie musza sciagac planow/danych wszystkich budynkow (168 planow, 372MB
+// lacznie na dzien pisania tego kodu).
 const SYNC_DEFAULT_SERVER_URL = "https://ppoz.gteam.pl";
 
 // Zwraca "none" (brak parametru - nic do zrobienia), "ok" (link przyjety -
@@ -82,19 +91,27 @@ const SYNC_DEFAULT_SERVER_URL = "https://ppoz.gteam.pl";
 // zasada offline-first) albo "invalid" (serwer jednoznacznie odmowil - link
 // odwolany/wygasly, NIE zapisujemy tokenu). Rozroznienie "invalid" od
 // "offline" jest wazne: bez niego kazdy problem z siecia przy pierwszym
-// otwarciu linku wygladalby dla serwisanta jak odwolany dostep.
+// otwarciu linku wygladalby dla uzytkownika jak odwolany dostep.
 async function syncTryUrlServiceLogin() {
   const params = new URLSearchParams(window.location.search);
-  const token = params.get("service");
+  const serviceToken = params.get("service");
+  const buildingToken = params.get("buildingSync");
+  const token = serviceToken || buildingToken;
   if (!token) return "none";
 
   // Czyscimy adres z tokenu niezaleznie od wyniku weryfikacji - zeby link nie
   // zostal w historii przegladarki / na zrzucie ekranu.
   params.delete("service");
+  params.delete("buildingSync");
   const cleanUrl = window.location.pathname + (params.toString() ? `?${params}` : "") + window.location.hash;
   window.history.replaceState({}, "", cleanUrl);
 
   let deviceName = null;
+  // Offline (brak odpowiedzi z /api/whoami) - przyjmujemy optymistycznie role
+  // wynikajaca z tego, KTORY parametr uzyto (skad w ogole wziety token), i
+  // brak ograniczenia budynkow dopoki nie potwierdzi tego serwer.
+  let role = serviceToken ? "service" : "owner";
+  let restrictBuildings = null;
   try {
     const res = await fetch(`${SYNC_DEFAULT_SERVER_URL}/api/whoami`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -105,15 +122,22 @@ async function syncTryUrlServiceLogin() {
     if (res.ok) {
       const body = await res.json().catch(() => ({}));
       deviceName = body.device_name || null;
+      role = body.role || role;
+      restrictBuildings = Array.isArray(body.restrict_buildings) ? body.restrict_buildings : null;
     }
     // Inny kod (np. 5xx) - traktujemy jak brak sieci, kontynuujemy nizej.
   } catch (err) {
-    console.warn("[sync] nie udalo sie zweryfikowac linku serwisowego online, przyjmuje offline:", err);
+    console.warn("[sync] nie udalo sie zweryfikowac linku online, przyjmuje offline:", err);
   }
 
   await dbSetMeta("syncServerUrl", SYNC_DEFAULT_SERVER_URL);
   await dbSetMeta("syncToken", token);
-  await dbSetMeta("isServiceMode", true);
+  // isServiceMode wynika z FAKTYCZNEJ roli zwroconej przez serwer (whoami), a
+  // nie z tego, ktorego parametru URL uzyto - link synchronizacji budynkow to
+  // rola "owner" (pelny dostep), wiec NIE ma dostawac ograniczen interfejsu
+  // serwisanta (patrz syncApplyUiRestrictions w app.js).
+  await dbSetMeta("isServiceMode", role === "service");
+  await dbSetMeta("restrictBuildings", restrictBuildings);
   if (deviceName) await dbSetMeta("serviceLinkLabel", deviceName);
 
   await syncMigrateLegacyIds();
@@ -124,6 +148,14 @@ async function syncTryUrlServiceLogin() {
 
 async function syncIsServiceMode() {
   return !!(await dbGetMeta("isServiceMode"));
+}
+
+// null = brak ograniczenia (widzi wszystkie budynki - konto administratora
+// albo zwykly link serwisowy sprzed tej funkcji). Tablica kodow - urzadzenie
+// przyszlo z linku synchronizacji budynkow (patrz syncTryUrlServiceLogin).
+async function syncRestrictedBuildings() {
+  const value = await dbGetMeta("restrictBuildings");
+  return Array.isArray(value) && value.length ? value : null;
 }
 
 async function syncLogout() {
@@ -138,6 +170,7 @@ async function syncLogout() {
   }
   await dbSetMeta("syncToken", null);
   await dbSetMeta("isServiceMode", false);
+  await dbSetMeta("restrictBuildings", null);
 }
 
 function syncIsLoggedIn(cfg) {
@@ -632,6 +665,26 @@ function syncSetProgress(text) {
 let syncPullInFlight = false;
 let syncPullQueued = false;
 
+// Ostatnio uzywane budynki (max 3, najnowszy pierwszy) - zapisywane przy
+// kazdym wyborze budynku (patrz syncTouchRecentBuilding w loadPlans w
+// app.js). syncPull() dociaga je PRZED reszta kampusu przy kazdym tyku
+// synchronizacji, zeby budynki, do ktorych uzytkownik faktycznie wraca,
+// byly zawsze maksymalnie swieze - zamiast czekac w zwyklej kolejce kursora
+// razem z calym kampusem.
+const SYNC_RECENT_BUILDINGS_MAX = 3;
+
+async function syncGetRecentBuildings() {
+  const list = await dbGetMeta("syncRecentBuildings");
+  return Array.isArray(list) ? list : [];
+}
+
+async function syncTouchRecentBuilding(buildingCode) {
+  if (!buildingCode) return;
+  const list = await syncGetRecentBuildings();
+  const next = [buildingCode, ...list.filter((b) => b !== buildingCode)].slice(0, SYNC_RECENT_BUILDINGS_MAX);
+  await dbSetMeta("syncRecentBuildings", next);
+}
+
 async function syncPull() {
   const cfg = await syncGetConfig();
   if (!syncIsLoggedIn(cfg)) return;
@@ -641,6 +694,16 @@ async function syncPull() {
   }
   syncPullInFlight = true;
   try {
+    // Wlasne, osobne kursory per budynek (patrz syncPullRecords/Plans/
+    // PhotosMeta) sprawiaja, ze powtarzanie tego co tyk jest tanie -
+    // pobiera sie tylko to, co sie faktycznie zmienilo od ostatniego razu,
+    // nie caly budynek od nowa za kazdym razem.
+    const recentBuildings = await syncGetRecentBuildings();
+    for (const code of recentBuildings) {
+      await syncPullPlans(cfg, code);
+      await syncPullRecords(cfg, code);
+      await syncPullPhotosMeta(cfg, code);
+    }
     await syncPullRecords(cfg);
     await syncPullPlans(cfg);
     await syncPullPhotosMeta(cfg);
@@ -660,21 +723,117 @@ async function syncPull() {
   }
 }
 
-async function syncPullRecords(cfg) {
+// Gdy uzytkownik wybiera budynek (loadPlans w app.js), ten budynek ma dostac
+// priorytet: najpierw jego plany, potem markery/pomiary, na koncu zdjecia -
+// w tej kolejnosci, bo zdjecia i tak wymagaja, zeby marker byl juz lokalnie
+// (patrz syncFetchAndAttachPhoto). Dziala ROWNOLEGLE do zwyklego syncPull()
+// w tle (bez wzajemnego blokowania) i NIE rusza zadnego z globalnych
+// kursorow - to tylko "podejrzyj ten budynek teraz", normalny pelny
+// przebieg synchronizacji i tak kiedys do niego dojdzie sam. Pokazuje
+// widoczny baner "Ładowanie budynku… X%" (polaczony procent z 3 kategorii
+// naraz), ale TYLKO jesli faktycznie jest cokolwiek do pobrania - budynek
+// juz w pelni zsynchronizowany nie miga niepotrzebnym komunikatem.
+async function syncPrioritizeBuilding(buildingCode) {
+  const cfg = await syncGetConfig();
+  if (!syncIsLoggedIn(cfg) || !buildingCode) return;
+  await syncTouchRecentBuilding(buildingCode);
+
+  const totals = { plans: 0, records: 0, photos: 0 };
+  const dones = { plans: 0, records: 0, photos: 0 };
+  let bannerShown = false;
+  const updateBanner = () => {
+    const totalAll = totals.plans + totals.records + totals.photos;
+    const doneAll = dones.plans + dones.records + dones.photos;
+    if (totalAll <= 0) return;
+    bannerShown = true;
+    syncShowBuildingProgress(buildingCode, Math.min(100, Math.round((doneAll / totalAll) * 100)));
+  };
+
+  try {
+    await syncPullPlans(cfg, buildingCode, (d, t) => {
+      dones.plans = d;
+      totals.plans = t !== null ? t : d;
+      updateBanner();
+    });
+    const recordsChanged = await syncPullRecords(cfg, buildingCode, (d, t) => {
+      dones.records = d;
+      totals.records = t !== null ? t : d;
+      updateBanner();
+    });
+    const photosChanged = await syncPullPhotosMeta(cfg, buildingCode, (d, t) => {
+      dones.photos = d;
+      totals.photos = t !== null ? t : d;
+      updateBanner();
+    });
+    // Odswiez widok tylko jesli uzytkownik nadal patrzy na ten sam budynek -
+    // w miedzyczasie mogl juz przejsc do kolejnego.
+    if (
+      (recordsChanged || photosChanged) &&
+      typeof currentBuildingCode !== "undefined" &&
+      currentBuildingCode === buildingCode
+    ) {
+      if (typeof refreshMapMarkers === "function") await refreshMapMarkers();
+      if (typeof loadInventory === "function") await loadInventory();
+      if (typeof loadPomiary === "function") await loadPomiary();
+    }
+  } catch (err) {
+    console.error("[sync] syncPrioritizeBuilding nie dokonczyl sie:", buildingCode, err);
+  } finally {
+    if (bannerShown) syncHideBuildingProgress();
+    await syncRenderStatus();
+  }
+}
+
+function syncShowBuildingProgress(buildingCode, percent) {
+  const el = document.getElementById("building-sync-banner");
+  if (!el) return;
+  el.textContent = `Ładowanie budynku ${buildingCode}… ${percent}%`;
+  el.classList.remove("hidden");
+}
+
+function syncHideBuildingProgress() {
+  const el = document.getElementById("building-sync-banner");
+  if (el) el.classList.add("hidden");
+}
+
+// buildingCode (opcjonalny): doraznie dociaga markery/pomiary TYLKO tego
+// budynku - uzywa WLASNEGO kursora (osobnego per budynek), zeby powtarzane
+// wywolania (np. co tyk synchronizacji dla "ostatnich 3 budynkow" - patrz
+// syncPull) byly przyrostowe/tanie, a nie za kazdym razem od zera. Nigdy nie
+// dotyka globalnego kursora "syncPullCursor" - normalny, pelny przebieg w
+// tle (ktory i tak kiedys dojdzie do tego budynku) zostaje nienaruszony.
+// onProgress(done, total) - opcjonalny callback do paska postepu w UI;
+// "total" to total_count z pierwszej strony odpowiedzi (null, jesli serwer
+// go nie policzyl - np. stara wersja API).
+// Zwraca true, jesli cokolwiek faktycznie przyszlo (uzyteczne do odswiezenia UI).
+async function syncPullRecords(cfg, buildingCode = null, onProgress = null) {
   const db = await dbPromise;
-  let since = (await dbGetMeta("syncPullCursor")) || "1970-01-01 00:00:00.000000";
+  const cursorKey = buildingCode ? `syncPullCursor:${buildingCode}` : "syncPullCursor";
+  let since = (await dbGetMeta(cursorKey)) || "1970-01-01 00:00:00.000000";
   let hasMore = true;
+  let got = false;
+  let done = 0;
+  let total = null;
   while (hasMore) {
-    const res = await fetch(`${cfg.serverUrl}/api/sync/pull?since=${encodeURIComponent(since)}&limit=200`, {
+    const buildingParam = buildingCode ? `&building_code=${encodeURIComponent(buildingCode)}` : "";
+    const res = await fetch(`${cfg.serverUrl}/api/sync/pull?since=${encodeURIComponent(since)}&limit=200${buildingParam}`, {
       headers: { Authorization: `Bearer ${cfg.token}` },
     });
-    if (!res.ok) return;
+    if (!res.ok) return got;
     const body = await res.json();
-    for (const item of body.items) await syncApplyRemoteRecord(item);
+    if (total === null && typeof body.total_count === "number") total = body.total_count;
+    for (const item of body.items) {
+      await syncApplyRemoteRecord(item);
+      got = true;
+      done++;
+      if (onProgress) onProgress(done, total);
+    }
     since = body.next_since;
     hasMore = body.has_more;
-    await dbSetMeta("syncPullCursor", since);
+    await dbSetMeta(cursorKey, since);
   }
+  if (onProgress) onProgress(total !== null ? total : done, total !== null ? total : done);
+  return got;
 }
 
 async function syncApplyRemoteRecord(item) {
@@ -724,21 +883,29 @@ async function syncApplyRemoteRecord(item) {
   await db.put(store, record);
 }
 
-async function syncPullPlans(cfg) {
+// buildingCode (opcjonalny): jak w syncPullRecords - doraznie dociaga plany
+// TYLKO tego budynku, z wlasnym, osobnym kursorem (patrz komentarz przy
+// syncPullRecords). onProgress(done, total) - jak w syncPullRecords.
+async function syncPullPlans(cfg, buildingCode = null, onProgress = null) {
   const db = await dbPromise;
-  let since = (await dbGetMeta("syncPlansCursor")) || "1970-01-01 00:00:00.000000";
+  const cursorKey = buildingCode ? `syncPlansCursor:${buildingCode}` : "syncPlansCursor";
+  let since = (await dbGetMeta(cursorKey)) || "1970-01-01 00:00:00.000000";
   let hasMore = true;
   let done = 0;
+  let total = null;
   while (hasMore) {
-    const res = await fetch(`${cfg.serverUrl}/api/plans?since=${encodeURIComponent(since)}&limit=50`, {
+    const buildingParam = buildingCode ? `&building_code=${encodeURIComponent(buildingCode)}` : "";
+    const res = await fetch(`${cfg.serverUrl}/api/plans?since=${encodeURIComponent(since)}&limit=50${buildingParam}`, {
       headers: { Authorization: `Bearer ${cfg.token}` },
     });
-    if (!res.ok) return;
+    if (!res.ok) return done > 0;
     const body = await res.json();
+    if (total === null && typeof body.total_count === "number") total = body.total_count;
     for (const p of body.items) {
       if (!p.deleted && p.file_key) {
         done++;
         syncSetProgress(`Pobieram plany budynków… (${done})`);
+        if (onProgress) onProgress(done, total);
         const ok = await syncFetchAndStorePlan(cfg, p);
         // Nie przesuwamy kursora za nieudany pobór (np. polaczenie padlo w
         // trakcie sciagania duzego pliku planu) - inaczej ten plan zostalby
@@ -748,13 +915,14 @@ async function syncPullPlans(cfg) {
         // zacznie od tego samego "since" i powtorzy caly pakiet - plany juz
         // zapisane lokalnie w tym przebiegu pomija blyskawicznie (sa juz pod
         // tym samym kluczem), wiec nic nie sciaga sie dwa razy.
-        if (!ok) return;
+        if (!ok) return done > 0;
       }
     }
     since = body.next_since;
     hasMore = body.has_more;
-    await dbSetMeta("syncPlansCursor", since);
+    await dbSetMeta(cursorKey, since);
   }
+  if (onProgress) onProgress(total !== null ? total : done, total !== null ? total : done);
   // Tylko gdy faktycznie cos przyszlo (done > 0) - inaczej to walalo
   // bezwarunkowo po KAZDYM tiku synchronizacji (co 60s/online/powrot do karty),
   // co w loadBuildings()->loadPlans()->selectPlan() zamykalo panel edytowanego
@@ -762,6 +930,7 @@ async function syncPullPlans(cfg) {
   // sie nie zdazyly zapisac) oraz resetowalo widok mapy - w trakcie zwyklego
   // wpisywania notatki albo dodawania kilku zdjec pod rzad.
   if (done > 0 && typeof loadBuildings === "function") await loadBuildings();
+  return done > 0;
 }
 
 // Zwraca true, jesli plan jest juz bezpiecznie zapisany lokalnie (byl juz
@@ -794,34 +963,47 @@ async function syncFetchAndStorePlan(cfg, p) {
   }
 }
 
-async function syncPullPhotosMeta(cfg) {
+// buildingCode (opcjonalny): jak w syncPullRecords/syncPullPlans - doraznie
+// dociaga zdjecia TYLKO markerow tego budynku, bez ruszania globalnego
+// kursora "syncPhotosCursor".
+// buildingCode (opcjonalny): jak w syncPullRecords - doraznie dociaga zdjecia
+// TYLKO markerow tego budynku, z wlasnym, osobnym kursorem. onProgress(done,
+// total) - jak w syncPullRecords.
+async function syncPullPhotosMeta(cfg, buildingCode = null, onProgress = null) {
   const db = await dbPromise;
-  let since = (await dbGetMeta("syncPhotosCursor")) || "1970-01-01 00:00:00.000000";
+  const cursorKey = buildingCode ? `syncPhotosCursor:${buildingCode}` : "syncPhotosCursor";
+  let since = (await dbGetMeta(cursorKey)) || "1970-01-01 00:00:00.000000";
   let hasMore = true;
   let done = 0;
+  let total = null;
   while (hasMore) {
-    const res = await fetch(`${cfg.serverUrl}/api/photos?since=${encodeURIComponent(since)}&limit=100`, {
+    const buildingParam = buildingCode ? `&building_code=${encodeURIComponent(buildingCode)}` : "";
+    const res = await fetch(`${cfg.serverUrl}/api/photos?since=${encodeURIComponent(since)}&limit=100${buildingParam}`, {
       headers: { Authorization: `Bearer ${cfg.token}` },
     });
-    if (!res.ok) return;
+    if (!res.ok) return done > 0;
     const body = await res.json();
+    if (total === null && typeof body.total_count === "number") total = body.total_count;
     for (const p of body.items) {
       if (!p.deleted) {
         done++;
         syncSetProgress(`Pobieram zdjęcia… (${done})`);
+        if (onProgress) onProgress(done, total);
         const ok = await syncFetchAndAttachPhoto(cfg, p);
         // Jak w syncPullPlans: bez tego kazde zdjecie, ktorego nie udalo sie
         // pobrac (padla siec w trakcie, albo marker jeszcze nie dotarl przez
         // inna kolejnosc synchronizacji) zostalby pominiety na zawsze, mimo
         // ze komentarz nizej mowil "dogonimy przy nastepnym pull" - bez tego
         // przerwania to nigdy sie nie dzialo, bo kursor byl juz za nim.
-        if (!ok) return;
+        if (!ok) return done > 0;
       }
     }
     since = body.next_since;
     hasMore = body.has_more;
-    await dbSetMeta("syncPhotosCursor", since);
+    await dbSetMeta(cursorKey, since);
   }
+  if (onProgress) onProgress(total !== null ? total : done, total !== null ? total : done);
+  return done > 0;
 }
 
 // Jak syncFetchAndStorePlan: true = bezpiecznie zapisane/juz obecne, false =
@@ -870,9 +1052,11 @@ async function syncRenderStatus() {
     loginSection.classList.remove("hidden");
     activeSection.classList.add("hidden");
   } else {
+    const restrictBuildings = await syncRestrictedBuildings();
+    const scopeSuffix = restrictBuildings ? ` — tylko budynki: ${restrictBuildings.join(", ")}` : "";
     statusInfo.textContent = navigator.onLine
-      ? `Status: zalogowany, online (${cfg.serverUrl})`
-      : `Status: zalogowany, offline - zmiany czekają w kolejce (${cfg.serverUrl})`;
+      ? `Status: zalogowany, online (${cfg.serverUrl})${scopeSuffix}`
+      : `Status: zalogowany, offline - zmiany czekają w kolejce (${cfg.serverUrl})${scopeSuffix}`;
     pendingInfo.textContent = queueCount > 0 ? `Do wysłania: ${queueCount}` : "Wszystko wysłane.";
     loginSection.classList.add("hidden");
     activeSection.classList.remove("hidden");
@@ -953,6 +1137,7 @@ function syncWireUi() {
 
   syncRenderStatus();
   syncWireServiceLinksUi();
+  syncWireBuildingSyncLinksUi();
 }
 
 // --- Linki dla serwisantow (dostep bez logowania, jedna kategoria) ---
@@ -1105,6 +1290,151 @@ function syncWireServiceLinksUi() {
   });
 
   syncRenderServiceLinks();
+}
+
+// --- Linki synchronizacji budynkow (dostep bez logowania, PELNE uprawnienia
+// ograniczone do wybranych budynkow - patrz komentarz przy SYNC_DEFAULT_SERVER_URL
+// wyzej). Rewokacja to ten sam mechanizm co link serwisowy (DELETE /api/devices/{id}) -
+// oba to po prostu wiersze w `devices`, wiec syncRevokeServiceLink dziala dla obu. ---
+
+async function syncCreateBuildingSyncLink(label, buildings, expiresInDays) {
+  const cfg = await syncGetConfig();
+  if (!syncIsLoggedIn(cfg)) throw new Error("Zaloguj się najpierw.");
+  const res = await fetch(`${cfg.serverUrl}/api/building-sync-links`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.token}` },
+    body: JSON.stringify({ label, buildings, expires_in_days: expiresInDays || null }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Błąd (HTTP ${res.status})`);
+  return body;
+}
+
+async function syncListBuildingSyncLinks() {
+  const cfg = await syncGetConfig();
+  if (!syncIsLoggedIn(cfg)) return [];
+  const res = await fetch(`${cfg.serverUrl}/api/building-sync-links`, {
+    headers: { Authorization: `Bearer ${cfg.token}` },
+  });
+  if (!res.ok) return [];
+  const body = await res.json();
+  return body.links || [];
+}
+
+async function syncRenderBuildingSyncLinks() {
+  const listEl = document.getElementById("building-sync-links-list");
+  if (!listEl) return;
+  const links = await syncListBuildingSyncLinks();
+  listEl.innerHTML = "";
+  if (!links.length) {
+    listEl.textContent = "Brak utworzonych linków.";
+    return;
+  }
+  for (const link of links) {
+    const box = document.createElement("div");
+    box.className = "sync-conflict-item";
+    const status = syncServiceLinkStatus(link);
+    const p1 = document.createElement("p");
+    p1.innerHTML = `<strong>${link.device_name}</strong> — budynki: ${(link.buildings || []).join(", ")} — status: ${status}`;
+    const p2 = document.createElement("p");
+    p2.textContent =
+      `Utworzono: ${new Date(link.created_at.replace(" ", "T") + "Z").toLocaleString("pl-PL")}` +
+      (link.expires_at ? ` · Ważny do: ${new Date(link.expires_at.replace(" ", "T") + "Z").toLocaleDateString("pl-PL")}` : "") +
+      (link.last_used_at ? ` · Ostatnio użyty: ${new Date(link.last_used_at.replace(" ", "T") + "Z").toLocaleString("pl-PL")}` : "");
+    box.appendChild(p1);
+    box.appendChild(p2);
+    if (status === "aktywny") {
+      const revokeBtn = document.createElement("button");
+      revokeBtn.type = "button";
+      revokeBtn.className = "danger";
+      revokeBtn.textContent = "Wyłącz link";
+      revokeBtn.addEventListener("click", async () => {
+        if (!confirm(`Wyłączyć link "${link.device_name}"? Urządzenie straci dostęp natychmiast.`)) return;
+        await syncRevokeServiceLink(link.id);
+        await syncRenderBuildingSyncLinks();
+      });
+      box.appendChild(revokeBtn);
+    }
+    listEl.appendChild(box);
+  }
+}
+
+// Checkboxy budynkow budowane z buildingsData (app.js) - lista budynkow, ktore
+// TO urzadzenie ma juz lokalnie zsynchronizowane. Zaklada, ze administrator
+// tworzacy link ma juz u siebie pelny komplet planow (normalny przypadek dla
+// konta-wlasciciela bez wlasnych ograniczen).
+function syncRenderBuildingCheckboxes() {
+  const container = document.getElementById("building-sync-link-buildings");
+  if (!container) return;
+  container.innerHTML = "";
+  for (const b of buildingsData) {
+    const label = document.createElement("label");
+    label.className = "building-sync-checkbox";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = b.code;
+    label.appendChild(input);
+    label.appendChild(document.createTextNode(" " + (BUILDING_DISPLAY_NAMES[b.code] || b.name)));
+    container.appendChild(label);
+  }
+}
+
+function syncWireBuildingSyncLinksUi() {
+  const createBtn = document.getElementById("building-sync-link-create-btn");
+  if (!createBtn) return;
+
+  syncRenderBuildingCheckboxes();
+
+  createBtn.addEventListener("click", async () => {
+    const label = document.getElementById("building-sync-link-label").value.trim();
+    const buildings = Array.from(
+      document.querySelectorAll("#building-sync-link-buildings input[type=checkbox]:checked")
+    ).map((el) => el.value);
+    const expiresInput = document.getElementById("building-sync-link-expires").value.trim();
+    const expiresInDays = expiresInput ? Number(expiresInput) : null;
+    if (!label) {
+      alert("Podaj etykietę linku (np. nazwę urządzenia/lokalizacji).");
+      return;
+    }
+    if (!buildings.length) {
+      alert("Zaznacz przynajmniej jeden budynek.");
+      return;
+    }
+    createBtn.disabled = true;
+    try {
+      const result = await syncCreateBuildingSyncLink(label, buildings, expiresInDays);
+      const url = `${window.location.origin}${window.location.pathname}?buildingSync=${result.token}`;
+      const resultEl = document.getElementById("building-sync-link-result");
+      resultEl.innerHTML = "";
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.textContent = url;
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.className = "secondary";
+      copyBtn.textContent = "Kopiuj";
+      copyBtn.addEventListener("click", () => {
+        navigator.clipboard.writeText(url).catch(() => {});
+      });
+      resultEl.appendChild(document.createTextNode("Link gotowy: "));
+      resultEl.appendChild(link);
+      resultEl.appendChild(document.createTextNode(" "));
+      resultEl.appendChild(copyBtn);
+      document.getElementById("building-sync-link-label").value = "";
+      document.getElementById("building-sync-link-expires").value = "";
+      document
+        .querySelectorAll("#building-sync-link-buildings input[type=checkbox]")
+        .forEach((el) => (el.checked = false));
+      await syncRenderBuildingSyncLinks();
+    } catch (err) {
+      alert(err.message || "Nie udało się utworzyć linku.");
+    } finally {
+      createBtn.disabled = false;
+    }
+  });
+
+  syncRenderBuildingSyncLinks();
 }
 
 // syncMigrateLegacyIds() i start (syncWireUi/syncTryFlush/syncPull) sa wywolywane
