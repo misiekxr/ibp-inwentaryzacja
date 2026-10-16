@@ -6,7 +6,7 @@
 // sam badge) jest juz w pelni sparsowany, zanim ta linia w ogole sie wykona;
 // nasluch na DOMContentLoaded tutaj nigdy by sie nie odpalil (zdarzenie juz
 // minelo), zostawiajac badge pusty.
-const BUILD_VERSION = "v51 · 13.33.16.10.26";
+const BUILD_VERSION = "v52 · 14.08.16.10.26";
 const buildVersionBadgeEl = document.getElementById("build-version-badge");
 if (buildVersionBadgeEl) buildVersionBadgeEl.textContent = BUILD_VERSION;
 
@@ -2883,21 +2883,51 @@ async function loadInventory() {
   currentInventoryMarkers = markers;
 
   // Mozliwe duplikaty: identyczna notatka (po trim, bez wzgledu na wielkosc
-  // liter) w tym samym budynku, w aktualnie widocznej (przefiltrowanej)
-  // liscie - np. po zdublowaniu punktow ze starego rzutu na nowy (patrz
-  // buildings/C4). Tylko podpowiedz - patrz openCompareModal.
-  const dupKeyGroups = new Map();
+  // liter) w tym samym budynku. SAM tekst notatki to za malo - np. kilka
+  // boksow dla zwierzat ma CELOWO identyczny, ogolny opis mimo ze to rozne,
+  // odlegle miejsca (zdarzenia #10-13, 2026-10-16: falszywy alarm, bo liczyl
+  // sie tylko tekst). Dlatego w obrebie TEGO SAMEGO planu dodatkowo wymagamy
+  // bliskiej odleglosci wspolrzednych (przypadkowe dwukrotne stuknieciu w to
+  // samo miejsce) - a dla RÓZNYCH planow (np. po zdublowaniu punktow ze
+  // starego rzutu na nowy, patrz buildings/C4) wspolrzedne i tak nie sa
+  // porownywalne (inny obraz), wiec sama notatka wystarcza. Tylko podpowiedz
+  // do recznej oceny - patrz openCompareModal.
+  const DUP_SAME_PLAN_DISTANCE = 20; // px we wspolrzednych danego rzutu
+  const noteGroups = new Map();
   for (const m of markers) {
     const note = (m.note || "").trim().toLowerCase();
     if (!note) continue;
     const key = `${m.buildingCode}::${note}`;
-    if (!dupKeyGroups.has(key)) dupKeyGroups.set(key, []);
-    dupKeyGroups.get(key).push(m.id);
+    if (!noteGroups.has(key)) noteGroups.set(key, []);
+    noteGroups.get(key).push(m);
   }
   const dupIdToGroupIds = new Map();
-  for (const ids of dupKeyGroups.values()) {
-    if (ids.length < 2) continue;
-    for (const id of ids) dupIdToGroupIds.set(id, ids);
+  for (const group of noteGroups.values()) {
+    if (group.length < 2) continue;
+    const parent = group.map((_, i) => i);
+    const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    const union = (i, j) => {
+      const a = find(i), b = find(j);
+      if (a !== b) parent[a] = b;
+    };
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        const a = group[i], b = group[j];
+        const samePlan = a.planFile === b.planFile;
+        const dist = Math.hypot((a.x || 0) - (b.x || 0), (a.y || 0) - (b.y || 0));
+        if (!samePlan || dist <= DUP_SAME_PLAN_DISTANCE) union(i, j);
+      }
+    }
+    const clusters = new Map();
+    group.forEach((m, i) => {
+      const root = find(i);
+      if (!clusters.has(root)) clusters.set(root, []);
+      clusters.get(root).push(m.id);
+    });
+    for (const ids of clusters.values()) {
+      if (ids.length < 2) continue;
+      for (const id of ids) dupIdToGroupIds.set(id, ids);
+    }
   }
 
   const tbody = document.querySelector("#inventory-table tbody");
