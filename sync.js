@@ -33,6 +33,14 @@ async function syncGetConfig() {
   return { serverUrl, token };
 }
 
+// Inwestor aktualnie wybrany w pasku nad mapa (patrz #investor-select w
+// index.html) - glowny zakres biezacej synchronizacji (patrz syncPullRecords/
+// Plans/PhotosMeta nizej). "UPWR" to bezpieczny domyslny stan sprzed tej
+// funkcji (wszystkie dotychczasowe dane naleza do UPWr).
+async function syncGetCurrentInvestor() {
+  return (await dbGetMeta("currentInvestor")) || "UPWR";
+}
+
 function syncGuessDeviceName() {
   const ua = navigator.userAgent || "";
   if (/Android/i.test(ua)) return "Telefon Android";
@@ -334,6 +342,7 @@ async function syncPushRecord(cfg, item) {
   const store = SYNC_STORE[item.type];
   let data;
   let baseUpdatedAt;
+  let investorCode = null;
 
   if (item.deleted) {
     data = {};
@@ -348,13 +357,21 @@ async function syncPushRecord(cfg, item) {
     const { id, photos, planKey, _syncUpdatedAt, ...rest } = record;
     data = rest;
     baseUpdatedAt = _syncUpdatedAt || null;
+    // investorCode jest ustawiany na rekordzie przy TWORZENIU (app.js, tak
+    // samo jak buildingCode) - serwer i tak ignoruje to pole przy UPDATE
+    // (patrz SyncController::applyChange), wiec wysylamy je zawsze, bez
+    // sprawdzania czy to create czy update.
+    investorCode = record.investorCode || null;
   }
 
   const res = await fetch(`${cfg.serverUrl}/api/sync/push`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.token}` },
     body: JSON.stringify({
-      changes: [{ id: item.id, type: item.type, building_code: item.buildingCode, base_updated_at: baseUpdatedAt, deleted: !!item.deleted, data }],
+      changes: [{
+        id: item.id, type: item.type, building_code: item.buildingCode,
+        investor_code: investorCode, base_updated_at: baseUpdatedAt, deleted: !!item.deleted, data,
+      }],
     }),
   });
   if (!res.ok) return; // np. 401 - zostaw w kolejce, uzytkownik zobaczy status "niezalogowany" po odswiezeniu
@@ -467,6 +484,7 @@ async function syncPushPlan(cfg, item) {
 
   const form = new FormData();
   form.append("building_code", plan.buildingCode);
+  form.append("investor_code", plan.investorCode || "UPWR");
   form.append("name", plan.name);
   form.append("sort_order", String(plan.sortOrder || 0));
   form.append("file_key", plan.file);
@@ -815,7 +833,14 @@ function syncHideBuildingProgress() {
 // Zwraca true, jesli cokolwiek faktycznie przyszlo (uzyteczne do odswiezenia UI).
 async function syncPullRecords(cfg, buildingCode = null, onProgress = null) {
   const db = await dbPromise;
-  const cursorKey = buildingCode ? `syncPullCursor:${buildingCode}` : "syncPullCursor";
+  const investorCode = await syncGetCurrentInvestor();
+  // Glowny (nie-doraznie-priorytetowy) przebieg ma WLASNY kursor per inwestor -
+  // inaczej przelaczenie inwestora z juz-dawno-zsynchronizowanym "since" w
+  // pamieci pomineloby caly historyczny dorobek drugiego inwestora (patrz
+  // syncGetCurrentInvestor). Kursory per-budynek (priorytetowe dociagniecie)
+  // zostaja bez zmian - kody budynkow miedzy inwestorami dzis sie nie
+  // powtarzaja, wiec nie ma ryzyka kolizji.
+  const cursorKey = buildingCode ? `syncPullCursor:${buildingCode}` : `syncPullCursor:inv:${investorCode}`;
   let since = (await dbGetMeta(cursorKey)) || "1970-01-01 00:00:00.000000";
   let hasMore = true;
   let got = false;
@@ -823,7 +848,8 @@ async function syncPullRecords(cfg, buildingCode = null, onProgress = null) {
   let total = null;
   while (hasMore) {
     const buildingParam = buildingCode ? `&building_code=${encodeURIComponent(buildingCode)}` : "";
-    const res = await fetch(`${cfg.serverUrl}/api/sync/pull?since=${encodeURIComponent(since)}&limit=200${buildingParam}`, {
+    const investorParam = `&investor_code=${encodeURIComponent(investorCode)}`;
+    const res = await fetch(`${cfg.serverUrl}/api/sync/pull?since=${encodeURIComponent(since)}&limit=200${buildingParam}${investorParam}`, {
       headers: { Authorization: `Bearer ${cfg.token}` },
     });
     if (!res.ok) return got;
@@ -861,7 +887,11 @@ async function syncApplyRemoteRecord(item) {
       await db.delete(store, item.id);
       return;
     }
-    const record = { ...item.data, id: item.id, _syncUpdatedAt: item.updated_at, _updatedByDeviceName: item.updated_by_device_name || null };
+    const record = {
+      ...item.data, id: item.id,
+      investorCode: item.investor_code || "UPWR",
+      _syncUpdatedAt: item.updated_at, _updatedByDeviceName: item.updated_by_device_name || null,
+    };
     await db.put(store, record);
     return;
   }
@@ -877,6 +907,7 @@ async function syncApplyRemoteRecord(item) {
     ...item.data,
     id: item.id,
     buildingCode: item.building_code,
+    investorCode: item.investor_code || (existing && existing.investorCode) || "UPWR",
     deletedAt: item.deleted ? item.updated_at : null,
     archivedAt: item.archived ? item.updated_at : null,
     pendingAction: item.pending_action || null,
@@ -895,14 +926,16 @@ async function syncApplyRemoteRecord(item) {
 // syncPullRecords). onProgress(done, total) - jak w syncPullRecords.
 async function syncPullPlans(cfg, buildingCode = null, onProgress = null) {
   const db = await dbPromise;
-  const cursorKey = buildingCode ? `syncPlansCursor:${buildingCode}` : "syncPlansCursor";
+  const investorCode = await syncGetCurrentInvestor();
+  const cursorKey = buildingCode ? `syncPlansCursor:${buildingCode}` : `syncPlansCursor:inv:${investorCode}`;
   let since = (await dbGetMeta(cursorKey)) || "1970-01-01 00:00:00.000000";
   let hasMore = true;
   let done = 0;
   let total = null;
   while (hasMore) {
     const buildingParam = buildingCode ? `&building_code=${encodeURIComponent(buildingCode)}` : "";
-    const res = await fetch(`${cfg.serverUrl}/api/plans?since=${encodeURIComponent(since)}&limit=50${buildingParam}`, {
+    const investorParam = `&investor_code=${encodeURIComponent(investorCode)}`;
+    const res = await fetch(`${cfg.serverUrl}/api/plans?since=${encodeURIComponent(since)}&limit=50${buildingParam}${investorParam}`, {
       headers: { Authorization: `Bearer ${cfg.token}` },
     });
     if (!res.ok) return done > 0;
@@ -958,6 +991,7 @@ async function syncFetchAndStorePlan(cfg, p) {
       key,
       buildingCode: p.building_code,
       buildingName: p.building_code,
+      investorCode: p.investor_code || "UPWR",
       file: p.file_key,
       name: p.name,
       sortOrder: p.sort_order,
@@ -978,14 +1012,16 @@ async function syncFetchAndStorePlan(cfg, p) {
 // total) - jak w syncPullRecords.
 async function syncPullPhotosMeta(cfg, buildingCode = null, onProgress = null) {
   const db = await dbPromise;
-  const cursorKey = buildingCode ? `syncPhotosCursor:${buildingCode}` : "syncPhotosCursor";
+  const investorCode = await syncGetCurrentInvestor();
+  const cursorKey = buildingCode ? `syncPhotosCursor:${buildingCode}` : `syncPhotosCursor:inv:${investorCode}`;
   let since = (await dbGetMeta(cursorKey)) || "1970-01-01 00:00:00.000000";
   let hasMore = true;
   let done = 0;
   let total = null;
   while (hasMore) {
     const buildingParam = buildingCode ? `&building_code=${encodeURIComponent(buildingCode)}` : "";
-    const res = await fetch(`${cfg.serverUrl}/api/photos?since=${encodeURIComponent(since)}&limit=100${buildingParam}`, {
+    const investorParam = `&investor_code=${encodeURIComponent(investorCode)}`;
+    const res = await fetch(`${cfg.serverUrl}/api/photos?since=${encodeURIComponent(since)}&limit=100${buildingParam}${investorParam}`, {
       headers: { Authorization: `Bearer ${cfg.token}` },
     });
     if (!res.ok) return done > 0;

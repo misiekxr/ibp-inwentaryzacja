@@ -6,7 +6,7 @@
 // sam badge) jest juz w pelni sparsowany, zanim ta linia w ogole sie wykona;
 // nasluch na DOMContentLoaded tutaj nigdy by sie nie odpalil (zdarzenie juz
 // minelo), zostawiajac badge pusty.
-const BUILD_VERSION = "v53 · 14.46.16.10.26";
+const BUILD_VERSION = "v54 · 15.10.16.10.26";
 const buildVersionBadgeEl = document.getElementById("build-version-badge");
 if (buildVersionBadgeEl) buildVersionBadgeEl.textContent = BUILD_VERSION;
 
@@ -109,9 +109,15 @@ async function dbGetMarkersByBuilding(buildingCode) {
   return db.getAllFromIndex("markers", "by-building", buildingCode);
 }
 
+// Filtrowane wg aktualnie wybranego inwestora - uzywane TYLKO gdy Inwentaryzacja/
+// Pomiary nie maja wybranego konkretnego budynku (bo wtedy dbGetMarkersByBuilding/
+// Plan i tak dzialaja na kodzie, ktory mogl pochodzic TYLKO z juz przefiltrowanej
+// listy budynkow - patrz buildingsFromDb). Bez tego "Wszystkie budynki" w
+// Inwentaryzacji mieszaloby dane wszystkich inwestorow naraz.
 async function dbGetAllMarkers() {
   const db = await dbPromise;
-  return db.getAll("markers");
+  const all = await db.getAll("markers");
+  return all.filter((m) => (m.investorCode || "UPWR") === currentInvestor);
 }
 
 // Cykl zycia wydarzen (markerow) - Kosz/Archiwum + prosby serwisu czekajace na
@@ -211,7 +217,8 @@ async function dbDeleteMeasurement(id) {
 
 async function dbGetAllMeasurements() {
   const db = await dbPromise;
-  return db.getAll("measurements");
+  const all = await db.getAll("measurements");
+  return all.filter((m) => (m.investorCode || "UPWR") === currentInvestor);
 }
 
 async function dbGetMeasurementsByBuilding(buildingCode) {
@@ -574,6 +581,8 @@ function renderSymbolPalette() {
 }
 
 // --- DOM ---
+const investorSelect = document.getElementById("investor-select");
+const investorAddBtn = document.getElementById("investor-add-btn");
 const buildingSelect = document.getElementById("building-select");
 const planSelect = document.getElementById("plan-select");
 const inventoryBuildingFilter = document.getElementById("inventory-building-filter");
@@ -816,6 +825,11 @@ let map = null;
 let imageOverlay = null;
 let leafletMarkers = {}; // id -> L.marker
 let currentBuildingCode = null;
+// Inwestor wybrany w pasku "Inwestor" nad mapa (patrz #investor-select) -
+// filtruje liste budynkow (loadBuildings) i jest zakresem biezacej
+// synchronizacji (syncGetCurrentInvestor w sync.js). "UPWR" = cala
+// dotychczasowa zawartosc appki sprzed wprowadzenia wielu inwestorow.
+let currentInvestor = "UPWR";
 let currentPlanKey = null;
 let currentPlanFile = null;
 let currentPlanName = null;
@@ -1107,8 +1121,87 @@ function makeIcon(m, lp) {
   });
 }
 
+// Lista inwestorow (klientow) - pobierana z serwera gdy jest polaczenie, z
+// lokalnym cache w meta na offline/pierwsze uruchomienie bez sieci. "UPWR"
+// jest zawsze dostepny jako fallback, nawet gdyby serwer byl niedostepny i
+// cache pusty - appka musi dac sie uzyc bez internetu.
+async function loadInvestors() {
+  let investors = (await dbGetMeta("investorsList")) || [{ code: "UPWR", name: "UPWr" }];
+  try {
+    const cfg = await syncGetConfig();
+    if (syncIsLoggedIn(cfg)) {
+      const res = await fetch(`${cfg.serverUrl}/api/investors`, { headers: { Authorization: `Bearer ${cfg.token}` } });
+      if (res.ok) {
+        const body = await res.json();
+        if (Array.isArray(body.investors) && body.investors.length) {
+          investors = body.investors;
+          await dbSetMeta("investorsList", investors);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[init] loadInvestors (uzywam cache/domyslnej listy):", err);
+  }
+
+  currentInvestor = (await dbGetMeta("currentInvestor")) || "UPWR";
+  if (!investors.some((i) => i.code === currentInvestor)) currentInvestor = investors[0].code;
+
+  investorSelect.innerHTML = "";
+  for (const inv of investors) {
+    const opt = document.createElement("option");
+    opt.value = inv.code;
+    opt.textContent = inv.name;
+    investorSelect.appendChild(opt);
+  }
+  investorSelect.value = currentInvestor;
+}
+
+investorSelect.addEventListener("change", async () => {
+  currentInvestor = investorSelect.value;
+  await dbSetMeta("currentInvestor", currentInvestor);
+  // Synchronizacja "na biezaco do inwestora" - przelaczenie od razu zaczyna
+  // ciagnac dane WYBRANEGO inwestora (wlasny kursor per inwestor, patrz
+  // syncGetCurrentInvestor w sync.js), nie tylko filtruje to, co juz jest
+  // lokalnie.
+  await loadBuildings();
+  if (typeof syncPull === "function") syncPull();
+});
+
+investorAddBtn.addEventListener("click", async () => {
+  const name = prompt("Nazwa nowego inwestora:");
+  if (!name || !name.trim()) return;
+  try {
+    const cfg = await syncGetConfig();
+    if (!syncIsLoggedIn(cfg)) {
+      alert("Zaloguj się najpierw (zakładka Uprawnienia).");
+      return;
+    }
+    const res = await fetch(`${cfg.serverUrl}/api/investors`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.token}` },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(body.error || `Nie udało się dodać inwestora (HTTP ${res.status})`);
+      return;
+    }
+    await loadInvestors();
+    currentInvestor = body.code;
+    await dbSetMeta("currentInvestor", currentInvestor);
+    investorSelect.value = currentInvestor;
+    await loadBuildings();
+  } catch (err) {
+    alert("Nie udało się dodać inwestora: " + (err && err.message ? err.message : err));
+  }
+});
+
 async function buildingsFromDb() {
-  const rows = await dbGetAllPlanImages();
+  const allRows = await dbGetAllPlanImages();
+  // Filtr wg aktualnie wybranego inwestora (pasek nad mapa) - plany sprzed
+  // wprowadzenia tej funkcji nie maja jeszcze investorCode lokalnie (dostana
+  // go przy kolejnym pelnym sync), wiec brak pola = traktujemy jak "UPWR".
+  const rows = allRows.filter((r) => (r.investorCode || "UPWR") === currentInvestor);
   const byCode = {};
   for (const r of rows) {
     if (!byCode[r.buildingCode]) {
@@ -1657,6 +1750,7 @@ async function onMapClick(e) {
   const isSymbol = !!placementMode;
   const marker = await dbAddMarker({
     buildingCode: currentBuildingCode,
+    investorCode: currentInvestor,
     planKey: currentPlanKey,
     planFile: currentPlanFile,
     planName: currentPlanName,
@@ -1737,7 +1831,7 @@ async function addMeasurementVertex(latlng) {
   if (!activeMeasurement) {
     // Pomiar to, jak symbol, zawsze realny element inwentaryzacji IBP - patrz
     // ten sam domyslny tekst kategorii przy stawianiu symbolu w onMapClick.
-    activeMeasurement = { buildingCode: currentBuildingCode, category: "Aktualizacja planów IBP", label: "", points: [], segments: [] };
+    activeMeasurement = { buildingCode: currentBuildingCode, investorCode: currentInvestor, category: "Aktualizacja planów IBP", label: "", points: [], segments: [] };
   }
 
   const points = activeMeasurement.points;
@@ -3462,6 +3556,7 @@ async function importBackupPayload(parsed) {
       key: planKey,
       buildingCode: r.buildingCode,
       buildingName: r.buildingName || r.buildingCode,
+      investorCode: r.investorCode || "UPWR",
       file: r.file,
       name: r.name,
       sortOrder: r.sortOrder || 0,
@@ -3665,6 +3760,7 @@ importPlansInput.addEventListener("change", async () => {
             key: planKey,
             buildingCode: r.buildingCode,
             buildingName: r.buildingName || r.buildingCode,
+            investorCode: r.investorCode || "UPWR",
             file: r.file,
             name: r.name,
             sortOrder: r.sortOrder || 0,
@@ -3892,6 +3988,7 @@ planAddSubmitBtn.addEventListener("click", async () => {
       key: planKey,
       buildingCode: code,
       buildingName,
+      investorCode: currentInvestor,
       file: fileName,
       name: planName,
       sortOrder,
@@ -4327,6 +4424,9 @@ async function syncApplyUiRestrictions() {
   document
     .querySelectorAll('.tab-btn[data-tab="pomiary"], .tab-btn[data-tab="backup"], .tab-btn[data-tab="permissions"]')
     .forEach((btn) => btn.classList.add("hidden"));
+  // Dodawanie inwestorow wymaga roli owner po stronie serwera (InvestorController)
+  // - chowamy przycisk, zeby serwisant nie klikal cos, co i tak dostanie 403.
+  investorAddBtn.classList.add("hidden");
 }
 
 // --- Start ---
@@ -4388,6 +4488,14 @@ async function syncApplyUiRestrictions() {
     renderSymbolPalette();
   } catch (err) {
     reportInitError("Wczytanie typów symboli", err);
+  }
+
+  // PRZED loadBuildings() - musimy znac currentInvestor, zeby buildingsFromDb()
+  // od razu filtrowalo poprawnie, zamiast migac pelna, niefiltrowana lista.
+  try {
+    await loadInvestors();
+  } catch (err) {
+    reportInitError("Wczytanie listy inwestorów", err);
   }
 
   try {
