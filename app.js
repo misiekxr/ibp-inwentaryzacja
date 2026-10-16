@@ -6,7 +6,7 @@
 // sam badge) jest juz w pelni sparsowany, zanim ta linia w ogole sie wykona;
 // nasluch na DOMContentLoaded tutaj nigdy by sie nie odpalil (zdarzenie juz
 // minelo), zostawiajac badge pusty.
-const BUILD_VERSION = "v52 · 14.08.16.10.26";
+const BUILD_VERSION = "v53 · 14.46.16.10.26";
 const buildVersionBadgeEl = document.getElementById("build-version-badge");
 if (buildVersionBadgeEl) buildVersionBadgeEl.textContent = BUILD_VERSION;
 
@@ -1403,10 +1403,15 @@ async function refreshMapMarkers() {
   leafletMarkers = {};
   const markers = await dbGetMarkersByPlan(currentPlanKey);
   const visible = markers.filter(markerMatchesMapFilter);
-  // Ta sama kolejnosc co w tabeli Inwentaryzacji (loadInventory) - zeby "Lp"
-  // na pinezce zwykle odpowiadalo numerowi wiersza w tabeli.
-  visible.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
-  visible.forEach((m, idx) => addLeafletMarker(m, idx + 1));
+  // "Lp" na pinezce = DOKLADNIE ten sam numer co kolumna "#" w tabeli
+  // Inwentaryzacji (nie wlasna numeracja per-plan) - inaczej pinezki na
+  // mapie mialyby inne numery niz wiersze w tabeli, co bylo mylace (patrz
+  // zdarzenia #10-13 w B3, 2026-10-16). loadInventory() odswieza
+  // currentInventoryMarkers wg AKTUALNYCH filtrow tej zakladki - jesli punkt
+  // akurat nie miesci sie w tych filtrach, po prostu nie dostaje numerku.
+  await loadInventory();
+  const lpById = new Map(currentInventoryMarkers.map((m, i) => [m.id, i + 1]));
+  visible.forEach((m) => addLeafletMarker(m, lpById.get(m.id)));
 }
 
 function addLeafletMarker(m, lp) {
