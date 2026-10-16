@@ -6,7 +6,7 @@
 // sam badge) jest juz w pelni sparsowany, zanim ta linia w ogole sie wykona;
 // nasluch na DOMContentLoaded tutaj nigdy by sie nie odpalil (zdarzenie juz
 // minelo), zostawiajac badge pusty.
-const BUILD_VERSION = "v50 · 15.55.15.10.26";
+const BUILD_VERSION = "v51 · 13.33.16.10.26";
 const buildVersionBadgeEl = document.getElementById("build-version-badge");
 if (buildVersionBadgeEl) buildVersionBadgeEl.textContent = BUILD_VERSION;
 
@@ -1066,7 +1066,7 @@ manageCategoriesBtn.addEventListener("click", async () => {
 // setIcon() tworzy nowy element ikony i po drodze potrafi urwac wlasne sciezki
 // zdarzen Leaflet (m.in. przeciaganie), co bylo przyczyna buga "wibracja dziala,
 // nic wiecej sie nie dzieje".
-function makeIcon(m) {
+function makeIcon(m, lp) {
   const hasPhoto = !!(m.photos && m.photos.length);
   const done = !!m.done;
   const layerColor = layerColorOf(m.layer);
@@ -1074,6 +1074,12 @@ function makeIcon(m) {
     ? `<div style="position:absolute;top:-4px;right:-4px;font-size:9px;line-height:1;">📷</div>`
     : "";
   const unlockDotHtml = `<div class="marker-unlock-dot" style="display:none;position:absolute;bottom:-3px;left:-3px;width:9px;height:9px;border-radius:50%;background:#dc2626;border:1.5px solid white;"></div>`;
+  // Male "Lp" (ta sama kolejnosc co numeracja w tabeli Inwentaryzacji - wg
+  // createdAt, patrz refreshMapMarkers) - zeby bylo widac na mapie KTORY to
+  // punkt bez klikania w kazdy z osobna. Wolny rog w obu wariantach ikony.
+  const lpBadge = lp != null
+    ? `<div style="position:absolute;bottom:-4px;right:-4px;min-width:14px;height:14px;padding:0 2px;border-radius:7px;background:#1f2328;color:#fff;font-size:9px;line-height:14px;text-align:center;font-weight:600;box-shadow:0 0 2px rgba(0,0,0,0.6);">${lp}</div>`
+    : "";
 
   if (m.symbolTypeId != null && symbolIconCache.has(m.symbolTypeId)) {
     const src = symbolIconCache.get(m.symbolTypeId);
@@ -1084,7 +1090,7 @@ function makeIcon(m) {
       // Ramka wokol calej ikonki = warstwa markera (m.layer) - patrz LAYER_COLORS.
       html: `<div style="position:relative;width:30px;height:30px;box-sizing:border-box;border:3px solid ${layerColor};border-radius:7px;background:rgba(255,255,255,0.85);">
         <img src="${src}" style="width:100%;height:100%;display:block;transform:${transform};" />
-        ${statusDot}${photoBadge}${unlockDotHtml}
+        ${statusDot}${photoBadge}${unlockDotHtml}${lpBadge}
       </div>`,
       iconSize: [30, 30],
       iconAnchor: [15, 15],
@@ -1095,7 +1101,7 @@ function makeIcon(m) {
   return L.divIcon({
     className: "",
     // Obramowka = warstwa markera (m.layer), wypelnienie = status (zrobione/nie).
-    html: `<div style="position:relative;width:16px;height:16px;border-radius:50%;background:${color};border:3px solid ${layerColor};box-shadow:0 0 3px rgba(0,0,0,0.5);">${photoBadge}${unlockDotHtml}</div>`,
+    html: `<div style="position:relative;width:16px;height:16px;border-radius:50%;background:${color};border:3px solid ${layerColor};box-shadow:0 0 3px rgba(0,0,0,0.5);">${photoBadge}${unlockDotHtml}${lpBadge}</div>`,
     iconSize: [16, 16],
     iconAnchor: [8, 8],
   });
@@ -1396,15 +1402,20 @@ async function refreshMapMarkers() {
   for (const id in leafletMarkers) map.removeLayer(leafletMarkers[id]);
   leafletMarkers = {};
   const markers = await dbGetMarkersByPlan(currentPlanKey);
-  for (const m of markers) if (markerMatchesMapFilter(m)) addLeafletMarker(m);
+  const visible = markers.filter(markerMatchesMapFilter);
+  // Ta sama kolejnosc co w tabeli Inwentaryzacji (loadInventory) - zeby "Lp"
+  // na pinezce zwykle odpowiadalo numerowi wiersza w tabeli.
+  visible.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+  visible.forEach((m, idx) => addLeafletMarker(m, idx + 1));
 }
 
-function addLeafletMarker(m) {
+function addLeafletMarker(m, lp) {
   const marker = L.marker([m.y, m.x], {
-    icon: makeIcon(m),
+    icon: makeIcon(m, lp),
     draggable: false,
   });
   marker.markerData = m;
+  marker.lp = lp;
   marker.dragUnlocked = false;
 
   // Przesuwanie pinezki wymaga przytrzymania 3 sek. (jak "tryb edycji" po
@@ -1478,8 +1489,25 @@ function addLeafletMarker(m) {
 
 function refreshLeafletMarker(m) {
   const old = leafletMarkers[m.id];
+  const lp = old ? old.lp : undefined;
   if (old) map.removeLayer(old);
-  addLeafletMarker(m);
+  addLeafletMarker(m, lp);
+}
+
+// "Pokaż na mapie" z zakładki Inwentaryzacja - samo wycentrowanie mapy nie
+// wystarczy, zeby wskazac KTORA to pinezka wsrod wielu na planie, wiec
+// dokladamy chwilowy zolty puls (patrz .marker-highlight w style.css).
+// setTimeout usuwa klase po animacji - bez tego kolejne klikniecie "Pokaz na
+// mapie" na TYM SAMYM punkcie nie odpalilo by animacji ponownie (ta sama
+// klasa juz by tam byla).
+function highlightLeafletMarker(marker) {
+  const el = marker.getElement ? marker.getElement() : null;
+  if (!el) return;
+  el.classList.remove("marker-highlight");
+  // wymuszenie reflow, zeby ponowne dodanie klasy zawsze odpalalo animacje od nowa
+  void el.offsetWidth;
+  el.classList.add("marker-highlight");
+  setTimeout(() => el.classList.remove("marker-highlight"), 2600);
 }
 
 function setSaveStatus(text, saving) {
@@ -2946,6 +2974,7 @@ async function loadInventory() {
       const marker = leafletMarkers[m.id];
       if (marker) {
         map.panTo(marker.getLatLng());
+        highlightLeafletMarker(marker);
         openMarkerPanel(m);
       }
     });

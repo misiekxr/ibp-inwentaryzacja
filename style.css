@@ -1,3 +1,17 @@
+/* "Pokaż na mapie" z zakładki Inwentaryzacja - chwilowe podswietlenie
+   docelowej pinezki (kilka pulsow zoltej poswiaty), zeby bylo od razu widac
+   KTORY to punkt wsrod wielu na planie, nie tylko ze mapa sie wycentrowala.
+   Klasa dodawana/usuwana z JS (patrz highlightLeafletMarker w app.js) -
+   po zakonczeniu animacji wyglad wraca do normalnego bez zadnych sladow. */
+@keyframes marker-highlight-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.9); }
+  50% { box-shadow: 0 0 0 14px rgba(234, 179, 8, 0); }
+}
+.marker-highlight {
+  animation: marker-highlight-pulse 0.8s ease-out 3;
+  border-radius: 50%;
+}
+
 :root {
   --bg: #f4f5f7;
   --panel: #ffffff;
