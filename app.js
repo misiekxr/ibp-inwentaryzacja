@@ -6,7 +6,7 @@
 // sam badge) jest juz w pelni sparsowany, zanim ta linia w ogole sie wykona;
 // nasluch na DOMContentLoaded tutaj nigdy by sie nie odpalil (zdarzenie juz
 // minelo), zostawiajac badge pusty.
-const BUILD_VERSION = "v54 · 15.10.16.10.26";
+const BUILD_VERSION = "v55 · 10.57.17.10.26";
 const buildVersionBadgeEl = document.getElementById("build-version-badge");
 if (buildVersionBadgeEl) buildVersionBadgeEl.textContent = BUILD_VERSION;
 
@@ -666,6 +666,8 @@ const markerPanel = document.getElementById("marker-panel");
 const markerPanelTitle = document.getElementById("marker-panel-title");
 const markerAttribution = document.getElementById("marker-attribution");
 const markerDone = document.getElementById("marker-done");
+const markerReassignBuilding = document.getElementById("marker-reassign-building");
+const markerReassignPlan = document.getElementById("marker-reassign-plan");
 const markerLayer = document.getElementById("marker-layer");
 const markerSprawaSection = document.getElementById("marker-sprawa-section");
 const markerDueDate = document.getElementById("marker-due-date");
@@ -742,6 +744,11 @@ const valueModalMessage = document.getElementById("value-modal-message");
 const valueModalInput = document.getElementById("value-modal-input");
 const valueModalOk = document.getElementById("value-modal-ok");
 const valueModalCancel = document.getElementById("value-modal-cancel");
+
+const markerContextMenu = document.getElementById("marker-context-menu");
+const markerCtxMove = document.getElementById("marker-ctx-move");
+const markerCtxMoveAll = document.getElementById("marker-ctx-move-all");
+const markerCtxDuplicate = document.getElementById("marker-ctx-duplicate");
 
 const compareModal = document.getElementById("compare-modal");
 const compareModalBody = document.getElementById("compare-modal-body");
@@ -1092,7 +1099,7 @@ function makeIcon(m, lp) {
   // createdAt, patrz refreshMapMarkers) - zeby bylo widac na mapie KTORY to
   // punkt bez klikania w kazdy z osobna. Wolny rog w obu wariantach ikony.
   const lpBadge = lp != null
-    ? `<div style="position:absolute;bottom:-4px;right:-4px;min-width:14px;height:14px;padding:0 2px;border-radius:7px;background:#1f2328;color:#fff;font-size:9px;line-height:14px;text-align:center;font-weight:600;box-shadow:0 0 2px rgba(0,0,0,0.6);">${lp}</div>`
+    ? `<div style="position:absolute;bottom:-3px;right:-3px;min-width:10px;height:10px;padding:0 1px;border-radius:5px;background:#1f2328;color:#fff;font-size:6px;line-height:10px;text-align:center;font-weight:600;box-shadow:0 0 2px rgba(0,0,0,0.6);">${lp}</div>`
     : "";
 
   if (m.symbolTypeId != null && symbolIconCache.has(m.symbolTypeId)) {
@@ -1164,6 +1171,12 @@ investorSelect.addEventListener("change", async () => {
   // syncGetCurrentInvestor w sync.js), nie tylko filtruje to, co juz jest
   // lokalnie.
   await loadBuildings();
+  // Jawne odswiezenie Inwentaryzacji/Pomiarow - loadBuildings() samo z siebie
+  // odswieza tylko Mape (przez selectPlan->refreshMapMarkers->loadInventory).
+  // Bez tego, siedzac akurat na zakladce Inwentaryzacja/Pomiary, zobaczyloby
+  // sie "martwy" widok do czasu nastepnej zmiany planu.
+  await loadInventory();
+  if (typeof loadPomiary === "function") await loadPomiary();
   if (typeof syncPull === "function") syncPull();
 });
 
@@ -1354,7 +1367,17 @@ function loadImageDimensions(url) {
   });
 }
 
+// Licznik "pokolen" wywolan - chroni przed klasycznym race condition przy
+// szybkim przelaczaniu budynkow/planow: starsze (wolniejsze) wywolanie
+// selectPlan, ktore akurat czekalo na await (np. dekodowanie obrazu), moglo
+// dokonczyc sie PO nowszym i narysowac na mapie SWOJE (juz nieaktualne)
+// markery/obraz, nadpisujac poprawny, swiezo wybrany budynek/plan - zgloszone
+// 2026-10-17 jako "na A2 parter wyswietlaja sie punkty z F13" (dane w bazie
+// byly caly czas poprawne - to byl wylacznie blad renderowania w appce).
+let selectPlanGeneration = 0;
+
 async function selectPlan(buildingCode, file, name) {
+  const myGeneration = ++selectPlanGeneration;
   updateHeaderControlsSummary();
   headerControls.classList.add("collapsed"); // bez efektu na desktopie - patrz media query w style.css
   await closeMarkerPanel(false); // nigdy nie kasuj "pustego" punktu przy programowym przeladowaniu - patrz komentarz w closeMarkerPanel
@@ -1376,11 +1399,14 @@ async function selectPlan(buildingCode, file, name) {
 
   const rec = await dbGetPlanImage(buildingCode, file);
   if (!rec) return;
+  if (myGeneration !== selectPlanGeneration) return; // ktos juz wybral cos innego w miedzyczasie
+
   if (currentPlanObjectUrl) URL.revokeObjectURL(currentPlanObjectUrl);
   currentPlanObjectUrl = URL.createObjectURL(rec.blob);
   const url = currentPlanObjectUrl;
 
   const { width, height } = await loadImageDimensions(url);
+  if (myGeneration !== selectPlanGeneration) return;
   const bounds = [[0, 0], [height, width]];
 
   if (imageOverlay) map.removeLayer(imageOverlay);
@@ -1391,6 +1417,7 @@ async function selectPlan(buildingCode, file, name) {
   map.fitBounds(bounds);
 
   await refreshMapMarkers();
+  if (myGeneration !== selectPlanGeneration) return;
   await renderMeasurementsForPlan(currentPlanKey);
 }
 
@@ -1505,6 +1532,11 @@ async function refreshMapMarkers() {
   await loadInventory();
   const lpById = new Map(currentInventoryMarkers.map((m, i) => [m.id, i + 1]));
   visible.forEach((m) => addLeafletMarker(m, lpById.get(m.id)));
+  // refreshMapMarkers tworzy WSZYSTKIE pinezki od nowa (nowe elementy DOM) -
+  // jesli akurat edytowany punkt jest na tym planie, trzeba mu oddac puls
+  // podswietlenia na nowym elemencie, bo stary (z klasa .marker-editing)
+  // zostal przed chwila usuniety z mapy.
+  if (editingMarkerId != null) setMarkerEditingHighlight(editingMarkerId, true);
 }
 
 function addLeafletMarker(m, lp) {
@@ -1543,13 +1575,24 @@ function addLeafletMarker(m, lp) {
   const lockDrag = () => {
     cancelLongPress();
     marker.dragUnlocked = false;
+    marker.groupMoveMode = false;
     marker.dragging.disable();
     setUnlockDotVisible(false);
   };
+  // Udostepnione na zewnatrz (menu prawego przycisku myszy, patrz
+  // showMarkerContextMenu) - "Przesun"/"Przesun wszystkie" musza umiec
+  // odblokowac przeciaganie DOWOLNEJ pinezki z poziomu jednego, wspolnego menu.
+  marker.unlockDrag = unlockDrag;
+  marker.lockDrag = lockDrag;
 
   marker.on("click", (e) => {
     L.DomEvent.stopPropagation(e);
     openMarkerPanel(marker.markerData);
+  });
+  marker.on("contextmenu", (e) => {
+    L.DomEvent.stopPropagation(e);
+    L.DomEvent.preventDefault(e);
+    showMarkerContextMenu(marker, e.originalEvent.clientX, e.originalEvent.clientY);
   });
   marker.on("dblclick", (e) => {
     L.DomEvent.stopPropagation(e);
@@ -1557,6 +1600,29 @@ function addLeafletMarker(m, lp) {
   });
   marker.on("dragend", async () => {
     const latlng = marker.getLatLng();
+    // "Przesun wszystkie" (z menu prawego przycisku) - ta pinezka jest tylko
+    // "uchwytem": przesuniecie, jakie jej nadano, dostaje KAZDY punkt na tym
+    // planie (wliczajac ja sama - stad brak osobnej aktualizacji ponizej).
+    if (marker.groupMoveMode) {
+      const origin = marker._groupMoveOrigin || latlng;
+      const dx = latlng.lng - origin.lng;
+      const dy = latlng.lat - origin.lat;
+      marker.groupMoveMode = false;
+      marker._groupMoveOrigin = null;
+      lockDrag();
+      if (dx !== 0 || dy !== 0) {
+        const all = await dbGetMarkersByPlan(currentPlanKey);
+        for (const other of all) {
+          const updated = await dbUpdateMarker(other.id, {
+            x: other.x + dx,
+            y: other.y + dy,
+            updatedAt: new Date().toISOString(),
+          });
+          if (updated) refreshLeafletMarker(updated);
+        }
+      }
+      return;
+    }
     const updated = await dbUpdateMarker(m.id, {
       x: latlng.lng,
       y: latlng.lat,
@@ -1580,10 +1646,85 @@ function addLeafletMarker(m, lp) {
     el.addEventListener("pointerup", cancelLongPress);
     el.addEventListener("pointercancel", cancelLongPress);
     el.addEventListener("pointerleave", cancelLongPress);
-    el.addEventListener("contextmenu", (e) => e.preventDefault());
   }
   leafletMarkers[m.id] = marker;
 }
+
+// --- Menu prawego przycisku myszy na pinezce (laptop/desktop) ---
+// Przesun = to samo, co dzis dlugie przytrzymanie na dotyku, tylko bez 3-sek.
+// opoznienia (na myszy przypadkowe wejscie w tryb przesuwania jest duzo mniej
+// prawdopodobne niz przy palcu). Przesun wszystkie = jedno przeciagniecie
+// dowolnej pinezki przesuwa WSZYSTKIE punkty na biezacym planie o ten sam
+// wektor (patrz "groupMoveMode" w addLeafletMarker). Duplikuj punkt = kopia
+// notatki/kategorii/warstwy w tym samym miejscu (lekko przesunieta, zeby nie
+// nachodzily) - do szybkiego opisania kolejnej, oddzielnej sprawy w tym samym
+// miejscu, bez przepisywania wszystkiego od nowa.
+let markerContextMenuTarget = null;
+
+function hideMarkerContextMenu() {
+  markerContextMenu.classList.add("hidden");
+  markerContextMenuTarget = null;
+}
+
+function showMarkerContextMenu(marker, clientX, clientY) {
+  markerContextMenuTarget = marker;
+  markerContextMenu.style.left = `${clientX}px`;
+  markerContextMenu.style.top = `${clientY}px`;
+  markerContextMenu.classList.remove("hidden");
+}
+
+document.addEventListener("click", (e) => {
+  if (!markerContextMenu.classList.contains("hidden") && !markerContextMenu.contains(e.target)) {
+    hideMarkerContextMenu();
+  }
+});
+
+markerCtxMove.addEventListener("click", () => {
+  if (markerContextMenuTarget) markerContextMenuTarget.unlockDrag();
+  hideMarkerContextMenu();
+});
+
+markerCtxMoveAll.addEventListener("click", () => {
+  const marker = markerContextMenuTarget;
+  if (marker) {
+    marker.groupMoveMode = true;
+    marker._groupMoveOrigin = marker.getLatLng();
+    marker.unlockDrag();
+  }
+  hideMarkerContextMenu();
+});
+
+markerCtxDuplicate.addEventListener("click", async () => {
+  const marker = markerContextMenuTarget;
+  hideMarkerContextMenu();
+  if (!marker) return;
+  const src = marker.markerData;
+  const now = new Date().toISOString();
+  const OFFSET = 25; // px we wspolrzednych planu - zeby kopia nie lezala idealnie na oryginale
+  const newMarker = await dbAddMarker({
+    buildingCode: src.buildingCode,
+    investorCode: src.investorCode || currentInvestor,
+    planKey: src.planKey,
+    planFile: src.planFile,
+    planName: src.planName,
+    x: src.x + OFFSET,
+    y: src.y + OFFSET,
+    note: src.note || "",
+    category: src.category || "",
+    layer: src.layer || "inventory",
+    symbolTypeId: src.symbolTypeId != null ? src.symbolTypeId : null,
+    rotation: src.rotation || 0,
+    mirrored: !!src.mirrored,
+    done: false,
+    dueDate: "",
+    reviewDate: "",
+    photos: [],
+    createdAt: now,
+    updatedAt: now,
+  });
+  refreshLeafletMarker(newMarker);
+  openMarkerPanel(newMarker);
+});
 
 function refreshLeafletMarker(m) {
   const old = leafletMarkers[m.id];
@@ -2172,8 +2313,109 @@ async function renderMeasurementsForPlan(planKey) {
   }
 }
 
+// Dodaje/usuwa ciagly puls na pinezce aktualnie otwartej w panelu edycji
+// (patrz .marker-editing w style.css) - zeby bylo widac KTORY to punkt na
+// planie, dopoki panel jest otwarty. Marker moze nie byc akurat narysowany
+// na mapie (np. edycja wywolana z zestawienia Inwentaryzacji na innym
+// budynku/planie niz ten obecnie wyswietlany) - wtedy po prostu nic nie robi.
+function setMarkerEditingHighlight(id, on) {
+  const marker = id != null ? leafletMarkers[id] : null;
+  const el = marker && marker.getElement ? marker.getElement() : null;
+  if (!el) return;
+  el.classList.toggle("marker-editing", on);
+}
+
+// Budynek/kondygnacja w panelu punktu - do recznej korekty, gdy punkt trafil
+// nie tam gdzie trzeba (np. pomylka przy stawianiu w terenie). x/y NIE sa
+// przeliczane (inny obraz = inna skala/kadr) - po przepieciu punkt laduje w
+// tym samym miejscu na NOWYM planie i trzeba go recznie przeciagnac (patrz
+// "Przesun" w menu prawego przycisku na pinezce).
+function populateMarkerReassignSelects(m) {
+  markerReassignBuilding.innerHTML = "";
+  for (const b of buildingsData) {
+    const opt = document.createElement("option");
+    opt.value = b.code;
+    opt.textContent = BUILDING_DISPLAY_NAMES[b.code] || b.name;
+    markerReassignBuilding.appendChild(opt);
+  }
+  if (buildingsData.some((b) => b.code === m.buildingCode)) {
+    markerReassignBuilding.value = m.buildingCode;
+  } else if (buildingsData.length) {
+    // Punkt nalezy do budynku, ktorego appka akurat lokalnie nie ma (np. nie
+    // zsynchronizowany jeszcze plan) - dopisz go tymczasowo do listy, zeby
+    // select mial co pokazac, zamiast cichej desynchronizacji z danymi.
+    const opt = document.createElement("option");
+    opt.value = m.buildingCode;
+    opt.textContent = `${m.buildingCode} (brak lokalnie planow)`;
+    markerReassignBuilding.appendChild(opt);
+    markerReassignBuilding.value = m.buildingCode;
+  }
+  populateMarkerReassignPlans(markerReassignBuilding.value, m.planFile);
+}
+
+function populateMarkerReassignPlans(buildingCode, preferredFile) {
+  markerReassignPlan.innerHTML = "";
+  const building = buildingsData.find((b) => b.code === buildingCode);
+  const plans = building ? building.plans : [];
+  for (const p of plans) {
+    const opt = document.createElement("option");
+    opt.value = p.file;
+    opt.textContent = p.name;
+    markerReassignPlan.appendChild(opt);
+  }
+  if (plans.some((p) => p.file === preferredFile)) {
+    markerReassignPlan.value = preferredFile;
+  } else if (preferredFile) {
+    const opt = document.createElement("option");
+    opt.value = preferredFile;
+    opt.textContent = `${preferredFile} (brak lokalnie)`;
+    markerReassignPlan.appendChild(opt);
+    markerReassignPlan.value = preferredFile;
+  }
+}
+
+markerReassignBuilding.addEventListener("change", () => {
+  const building = buildingsData.find((b) => b.code === markerReassignBuilding.value);
+  const firstFile = building && building.plans.length ? building.plans[0].file : "";
+  populateMarkerReassignPlans(markerReassignBuilding.value, firstFile);
+  saveMarkerReassignment();
+});
+markerReassignPlan.addEventListener("change", saveMarkerReassignment);
+
+async function saveMarkerReassignment() {
+  if (editingMarkerId == null) return;
+  const buildingCode = markerReassignBuilding.value;
+  const file = markerReassignPlan.value;
+  if (!buildingCode || !file) return;
+  const building = buildingsData.find((b) => b.code === buildingCode);
+  const plan = building ? building.plans.find((p) => p.file === file) : null;
+  const id = editingMarkerId;
+  const updated = await dbUpdateMarker(id, {
+    buildingCode,
+    planFile: file,
+    planName: plan ? plan.name : file,
+    planKey: planKeyOf(buildingCode, file),
+    updatedAt: new Date().toISOString(),
+  });
+  if (!updated) return;
+  setSaveStatus("Zapisano", false);
+  // Jesli punkt zostal przepiety na INNY plan niz ten aktualnie wyswietlany -
+  // znika z biezacego widoku mapy (bedzie na nowym planie po jego wybraniu).
+  if (updated.planKey !== currentPlanKey) {
+    const old = leafletMarkers[id];
+    if (old) map.removeLayer(old);
+    delete leafletMarkers[id];
+  } else {
+    refreshLeafletMarker(updated);
+  }
+  await loadInventory();
+}
+
 async function openMarkerPanel(m) {
+  setMarkerEditingHighlight(editingMarkerId, false);
   editingMarkerId = m.id;
+  setMarkerEditingHighlight(editingMarkerId, true);
+  populateMarkerReassignSelects(m);
   const symbolType = m.symbolTypeId != null ? symbolTypesData.find((t) => t.id === m.symbolTypeId) : null;
   markerPanelTitle.textContent = symbolType ? `${symbolType.name} #${m.id}` : `Punkt #${m.id}`;
   if (m._updatedByDeviceName) {
@@ -2248,6 +2490,7 @@ async function closeMarkerPanel(pruneIfEmpty = true) {
       delete leafletMarkers[editingMarkerId];
     }
   }
+  setMarkerEditingHighlight(editingMarkerId, false);
   markerPanel.classList.add("hidden");
   editingMarkerId = null;
   await loadInventory();
@@ -2770,7 +3013,13 @@ function measurementPlanSpan(m) {
 }
 
 async function loadPomiary() {
-  if (!buildingsData.length) return;
+  if (!buildingsData.length) {
+    // Patrz identyczny komentarz w loadInventory() - bez tego stara tabela
+    // poprzedniego inwestora/budynku zostawalaby widoczna po przelaczeniu.
+    const tbody = document.querySelector("#pomiary-table tbody");
+    if (tbody) tbody.innerHTML = "";
+    return;
+  }
   populatePomiaryBuildingFilter();
   await refreshPomiaryCategoryFilterOptions();
   const buildingFilter = pomiaryBuildingFilter.value;
@@ -2951,8 +3200,44 @@ compareModal.addEventListener("click", (e) => {
   if (e.target === compareModal) compareModal.classList.add("hidden");
 });
 
+// Wspolne dla "Pokaz na mapie" i "Edytuj" w zestawieniu Inwentaryzacji -
+// przelacza na wlasciwy budynek/plan (jesli trzeba), centruje mape na
+// punkcie i otwiera pelny panel edycji (ten sam, co przy kliknieciu pinezki
+// bezposrednio na mapie).
+async function showMarkerOnMapForEdit(id) {
+  document.querySelector('.tab-btn[data-tab="map"]').click();
+  // Bug sprzed migracji numerycznych ID na UUID: Number(uuid) daje NaN, wiec
+  // dbGetMarker nigdy nie znajdowal rekordu - id trzeba przekazac jako string.
+  const m = await dbGetMarker(id);
+  if (!m) return;
+  if (m.buildingCode !== currentBuildingCode || m.planFile !== currentPlanFile) {
+    buildingSelect.value = m.buildingCode;
+    await loadPlans(m.buildingCode);
+    planSelect.value = m.planFile;
+    await selectPlan(m.buildingCode, m.planFile, m.planName);
+  }
+  const marker = leafletMarkers[m.id];
+  if (marker) {
+    map.panTo(marker.getLatLng());
+    highlightLeafletMarker(marker);
+    openMarkerPanel(m);
+  }
+}
+
 async function loadInventory() {
-  if (!buildingsData.length) return;
+  if (!buildingsData.length) {
+    // Bez tego: przelaczenie na inwestora/budynek, ktory jeszcze NIC lokalnie
+    // nie ma (np. "Łaciarska" na urzadzeniu, ktore nigdy jej nie synchronizowalo)
+    // zostawialo na ekranie STARA tabele poprzedniego inwestora - wygladalo
+    // jak "Łaciarska pokazuje sprawy UPWr", a to byla po prostu nieodswiezona
+    // tabela sprzed przelaczenia (zgloszone 2026-10-17). Czyscimy zamiast
+    // wychodzic po cichu, zeby zawsze pokazywac stan ZGODNY z aktualnym
+    // wyborem, nawet jesli to "jeszcze nic tu nie ma".
+    currentInventoryMarkers = [];
+    const tbody = document.querySelector("#inventory-table tbody");
+    if (tbody) tbody.innerHTML = "";
+    return;
+  }
   populateInventoryBuildingFilter();
   populateInventoryPlanFilter();
   await refreshCategoryFilterOptions();
@@ -3086,33 +3371,15 @@ async function loadInventory() {
     a.addEventListener("click", () => openCompareModal(a.dataset.compareIds.split(",")));
   });
   tbody.querySelectorAll("a[data-id]").forEach((a) => {
-    a.addEventListener("click", async () => {
-      document.querySelector('.tab-btn[data-tab="map"]').click();
-      // Bug sprzed migracji numerycznych ID na UUID: Number(uuid) daje NaN,
-      // wiec dbGetMarker nigdy nie znajdowal rekordu - "Pokaz na mapie" po
-      // cichu nic nie robilo (sam tab sie przelaczal, nic wiecej). id trzeba
-      // przekazac jako string, tak jak jest zapisany w IndexedDB.
-      const m = await dbGetMarker(a.dataset.id);
-      if (!m) return;
-      if (m.buildingCode !== currentBuildingCode || m.planFile !== currentPlanFile) {
-        buildingSelect.value = m.buildingCode;
-        await loadPlans(m.buildingCode);
-        planSelect.value = m.planFile;
-        await selectPlan(m.buildingCode, m.planFile, m.planName);
-      }
-      const marker = leafletMarkers[m.id];
-      if (marker) {
-        map.panTo(marker.getLatLng());
-        highlightLeafletMarker(marker);
-        openMarkerPanel(m);
-      }
-    });
+    a.addEventListener("click", () => showMarkerOnMapForEdit(a.dataset.id));
   });
+  // "Edytuj" otwiera TEN SAM pelny panel co klikniecie pinezki na mapie
+  // (zamiast dawnego, okrojonego event-edit-modal bez zdjec/usuwania) - na
+  // wyrazna prosbe, zeby obie drogi dawaly identyczny zestaw opcji, w tym
+  // Usun/Archiwizuj. Technicznie to teraz to samo dzialanie co "Pokaz na
+  // mapie" (przelacza zakladke, bo markerPanel zyje w DOM mapy).
   tbody.querySelectorAll("a[data-edit-id]").forEach((a) => {
-    a.addEventListener("click", async () => {
-      const m = await dbGetMarker(a.dataset.editId);
-      if (m) openEventEditModal(m);
-    });
+    a.addEventListener("click", () => showMarkerOnMapForEdit(a.dataset.editId));
   });
   tbody.querySelectorAll("a[data-lifecycle-id]").forEach((a) => {
     a.addEventListener("click", () => undoMarkerLifecycleAction(a.dataset.lifecycleId, a.dataset.lifecycleAction));

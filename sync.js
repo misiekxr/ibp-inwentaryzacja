@@ -729,9 +729,20 @@ async function syncPull() {
     } catch (err) {
       console.error("[sync] odswiezanie ostatnich budynkow nie dokonczylo sie (pelny sync ponizej i tak ruszy):", err);
     }
-    await syncPullRecords(cfg);
+    const recordsChanged = await syncPullRecords(cfg);
     await syncPullPlans(cfg);
-    await syncPullPhotosMeta(cfg);
+    const photosChanged = await syncPullPhotosMeta(cfg);
+    // Bez tego: zdjecie dociagniete w tle PO tym jak zakladka Inwentaryzacja/
+    // Pomiary byla juz wyrenderowana zostawalo niewidoczne w tabeli (puste
+    // miniaturki) do czasu jakiegos INNEGO zdarzenia, ktore akurat odswiezylo
+    // widok (np. zmiana planu) - mimo ze samo klikniecie pinezki na mapie
+    // dzialalo poprawnie, bo tamten widok zawsze czyta aktualne dane na
+    // biezaco. Zgloszone 2026-10-17 jako "na liscie nie bylo widac zdjecia".
+    if (recordsChanged || photosChanged) {
+      if (typeof loadInventory === "function") await loadInventory();
+      if (typeof loadPomiary === "function") await loadPomiary();
+      if (typeof refreshMapMarkers === "function") await refreshMapMarkers();
+    }
   } catch (err) {
     // Lapiemy tu zarowno "brak sieci" jak i realne bledy (np. IndexedDB odmawia
     // zapisu przy przepelnionej przestrzeni dyskowej) - loguj do konsoli, zeby

@@ -94,6 +94,12 @@
     <div id="marker-panel" class="hidden">
       <h3 id="marker-panel-title">Punkt</h3>
       <p id="marker-attribution" class="marker-attribution hidden"></p>
+      <label>Budynek
+        <select id="marker-reassign-building"></select>
+      </label>
+      <label>Kondygnacja / plan
+        <select id="marker-reassign-plan"></select>
+      </label>
       <label>Warstwa pracy
         <select id="marker-layer">
           <option value="inventory">Inwentaryzacja IBP</option>
@@ -518,6 +524,12 @@
       <button type="button" id="event-edit-cancel" class="secondary">Anuluj</button>
     </div>
   </div>
+</div>
+
+<div id="marker-context-menu" class="hidden">
+  <button type="button" id="marker-ctx-move" class="marker-ctx-item">↔ Przesuń</button>
+  <button type="button" id="marker-ctx-move-all" class="marker-ctx-item">⇕ Przesuń wszystkie</button>
+  <button type="button" id="marker-ctx-duplicate" class="marker-ctx-item">⧉ Duplikuj punkt</button>
 </div>
 
 <div id="compare-modal" class="hidden">
